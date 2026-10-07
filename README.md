@@ -15,7 +15,8 @@ python process_l1c.py <absolute path to JobOrder.xml>
 The Job Order is the only input: it gives the product zip (`1CSP__RGB3`), the
 colour AUX file (`AXE1D_CLUT`, mandatory) and the logging level. The new
 product is written as `<NEW_ID>.zip` next to the input zip. No network is
-used at runtime (model weights from `hf_cache/`, see Offline deployment).
+used at runtime (model weights from `hf_cache/`, see Installation and offline
+deployment).
 
 | Exit code | Meaning |
 |---|---|
@@ -70,41 +71,18 @@ To switch, edit `<Method>` in the file. The tables and the model are protected
 by SHA-256 checksums, `<Method>` is not. A file without `<Method>` (version 3)
 works as `LUT`.
 
-The file is built from the LUT notebook's file (version 3) and Enrico's
-script, then read back and checked before it is kept:
+The AUX file is prepared offline from the LUT (version 3 file written by the
+LUT notebook) and Enrico's script; that tool is not part of this repository.
+
+## Installation and offline deployment
 
 ```bash
-python tools/build_colour_aux.py --lut-aux <version 3 AUX .xml> --class-model <applica_L1C_RGB.py> \
-    --method LUT --out-dir <folder>
+pip install -r requirements.txt
+python download_models.py           # once, with internet: OmniCloudMask weights into hf_cache/
 ```
-
-## Testing
-
-From the repository folder:
-
-```bash
-pip install -r requirements.txt pytest
-python download_models.py           # once: OmniCloudMask weights into hf_cache/
-python -m pytest tests              # colour step, calibration, Job Order, tools
-```
-
-On a real product (the run folder can be anywhere outside the repository):
-
-```bash
-python tools/make_job_order.py <product.zip> --work-dir <run folder> --aux <AUX .xml> [--method HYBRID]
-python process_l1c.py <run folder>/JobOrder.xml
-```
-
-`make_job_order.py` links the product zip into the run folder and writes the
-Job Order from `sample_job_order.xml`. With `--method` it puts a copy of the
-AUX file with that method in the run folder. The L1D product is written to the
-run folder; `grep "Processing times"` in the log gives the time of each step.
-
-## Offline deployment
 
 `process_l1c.py` sets `HF_HOME=<repository>/hf_cache` and `HF_HUB_OFFLINE=1`
-itself. Run `python download_models.py` once on a machine with internet, then
-ship `hf_cache/` with the code:
+itself, so it never goes online. Ship `hf_cache/` with the code:
 
 ```bash
 zip -r iride_eaglet_processor_deploy.zip process_l1c.py job_order.py pdgs_logger.py \
@@ -132,7 +110,6 @@ pdgs_logger.py              PDGS log format
 product_naming.py           L1C -> L1D names, product rename
 download_models.py          fills hf_cache/ (once, with internet)
 task_table.xml              processor definition for PDGS
-sample_job_order.xml        Job Order template for local tests
 requirements.txt
 src/iride_eaglet_processor/
     raster_reader.py        reads the product
@@ -144,10 +121,6 @@ src/iride_eaglet_processor/
     stats.py                cloud statistics
     metadata.py             STAC sidecar (L1D image, cloud outputs, checksums), CLM legend
     colour_correction.py    LUT, class model, hybrid; the L1D image writer (COG)
-tools/
-    build_colour_aux.py     builds the colour AUX file
-    make_job_order.py       Job Order for a local test run
-tests/                      pytest
 ```
 
 ## Open items (to confirm with Enrico / PDGS)
