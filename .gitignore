@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+.venv/
+venv/
+
+# OmniCloudMask weights, filled by download_models.py (large, not versioned)
+hf_cache/
+
+# local test runs
+test_wd/

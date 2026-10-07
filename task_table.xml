@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Task Table for the Eaglet-2 L1C -> L1D processor: cloud masking and colour
+  correction (version 2: the L1D image is the colour-corrected RGB, made with
+  the AXE1D_CLUT AUX input).
+
+  Several values below are PLACEHOLDERS pending confirmation from
+  Enrico / PDGS integration (Claudio) — search for "TODO" in this file.
+  Everything else follows the schema and conventions defined in
+  PDGS-ID-XPR-IRIDE-0209 (IRIDE Processor ICD Implementation Driver v2.4),
+  Section 3.1.1 and the worked example in Section 4.1.1.
+-->
+<Ipf_Task_Table xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="taskTable.xsd">
+  <!-- TODO: confirm the registered Processor_Name with PDGS integration.
+       Named after the OUTPUT level (L1D), per PDGS's own convention — see
+       the HAWK_L1B_PROC example in Section 4.1.1, named after its output
+       (L1B) despite consuming L0 input. -->
+  <Processor_Name>EAGLET2_L1D_CLM_PROC</Processor_Name>
+  <Version>02.00</Version>
+  <!-- Largest L1C RGB3 product observed so far is ~1.3GB. The product is
+       held unzipped, renamed and re-zipped; the L1D image is first written
+       as a plain GeoTIFF (uint16, 3 bands), then as the COG that replaces
+       the L1C image. TODO: measure on the largest product and tighten -->
+  <Min_Disk_Space units="MB">8192</Min_Disk_Space>
+  <!-- CPU-only full-scene inference measured ~5 minutes on a real product;
+       the colour step adds a full-resolution pass and the COG writing.
+       The processor logs the time of each step ("Processing times").
+       TODO: measure on the largest product and tighten -->
+  <Processing_Timeout units="sec">3600</Processing_Timeout>
+  <List_of_Dyn_ProcParams count="0">
+  </List_of_Dyn_ProcParams>
+  <List_of_Pools count="1">
+    <Pool>
+      <Detached>false</Detached>
+      <List_of_Tasks count="1">
+        <Task>
+          <!-- TODO: confirm the registered Task Name with PDGS integration -->
+          <Name>EAGLET2_L1D_CLM</Name>
+          <Version>02.00</Version>
+          <Killing_Signal>2</Killing_Signal>
+          <Critical>true</Critical>
+          <Criticality_Level>1</Criticality_Level>
+          <!-- TODO: PDGS integration team fills in the actual wrapper script
+               path per Appendix E, e.g.:
+               /opt/iride/iride-pdgs-ipf-prom-ttsc/<constellationID>/scripts/eaglet2-l1c-cloudmask-processor -->
+          <Executable_File_Name>eaglet2-l1c-cloudmask-processor</Executable_File_Name>
+          <List_of_Cfg_Files count="0">
+          </List_of_Cfg_Files>
+          <List_of_Inputs count="2">
+            <Input>
+              <Mode>ALWAYS</Mode>
+              <Mandatory>Yes</Mandatory>
+              <List_of_Alternatives count="1">
+                <Alternative>
+                  <Order>1</Order>
+                  <Origin>External</Origin>
+                  <Retrieval_Mode>LatestValidityClosest</Retrieval_Mode>
+                  <T0>0</T0>
+                  <T1>0</T1>
+                  <!-- TODO: confirm the registered File_Type code for
+                       Eaglet-2 L1C RGB3 products with PDGS/[RD_GSNCD] -->
+                  <File_Type>1CSP__RGB3</File_Type>
+                  <File_Name_Type>Physical</File_Name_Type>
+                </Alternative>
+              </List_of_Alternatives>
+            </Input>
+            <!-- Colour-correction AUX file (IME___AXE1D_CLUT_<validity start>_
+                 <validity stop>_<creation>____________O_001.xml): the LUT,
+                 Enrico's class model and the <Method> that selects one.
+                 Mandatory: the L1D image in IMG_DATA is made with it.
+                 TODO: confirm with PDGS integration the File_Type code,
+                 Origin and Retrieval_Mode for auxiliary files -->
+            <Input>
+              <Mode>ALWAYS</Mode>
+              <Mandatory>Yes</Mandatory>
+              <List_of_Alternatives count="1">
+                <Alternative>
+                  <Order>1</Order>
+                  <Origin>External</Origin>
+                  <Retrieval_Mode>LatestValCover</Retrieval_Mode>
+                  <T0>0</T0>
+                  <T1>0</T1>
+                  <File_Type>AXE1D_CLUT</File_Type>
+                  <File_Name_Type>Physical</File_Name_Type>
+                </Alternative>
+              </List_of_Alternatives>
+            </Input>
+          </List_of_Inputs>
+          <List_of_Outputs count="1">
+            <Output>
+              <!-- New L1D product, a genuinely separate file from the
+                   input (per Enrico/Paola's confirmed naming convention:
+                   "1CSP" -> "1DSP", generation timestamp updated to this
+                   run's processing time). The input product is untouched. -->
+              <Destination>External</Destination>
+              <Mandatory>Yes</Mandatory>
+              <File_Name_Type>Physical</File_Name_Type>
+              <!-- TODO: confirm the registered File_Type code for this
+                   new L1D product with PDGS/[RD_GSNCD] -->
+              <File_Type>1DSP__RGB3</File_Type>
+              <File_Name>./</File_Name>
+              <Reg_Exp>^IME[0-9]{2}_1DSP__RGB3.*\.zip$</Reg_Exp>
+            </Output>
+          </List_of_Outputs>
+          <Breakpoint>
+            <Enable>OFF</Enable>
+            <List_of_Brk_Files count="0"/>
+          </Breakpoint>
+          <!-- TODO: confirm with PDGS. The processor sets no thread cap:
+               the colour correction runs on one core, the cloud mask
+               (PyTorch) and the COG writing (GDAL) use the cores available -->
+          <Number_of_CPUs>2</Number_of_CPUs>
+          <Posix_ExitCode>false</Posix_ExitCode>
+        </Task>
+      </List_of_Tasks>
+    </Pool>
+  </List_of_Pools>
+</Ipf_Task_Table>

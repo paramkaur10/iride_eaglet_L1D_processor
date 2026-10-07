@@ -1,0 +1,5 @@
+numpy
+scipy
+rasterio
+torch
+omnicloudmask
