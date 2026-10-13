@@ -25,7 +25,9 @@ is written as `<NEW_ID>.zip` next to the input zip, and the log then says
 PDGS reads it). No network is used at runtime (model weights from
 `hf_cache/omnicloudmask/`, see Installation and offline deployment). The
 processor uses at most 2 CPU threads, the `Number_of_CPUs` of the Task Table,
-on any machine.
+on any machine, and writes only in the working directory (the folder of the
+Job Order): temporary files and library caches go to a scratch folder there,
+removed at the end.
 
 | Exit code | Meaning |
 |---|---|
@@ -142,21 +144,27 @@ zip -r iride_eaglet_processor_deploy.zip process_l1c.py job_order.py pdgs_logger
 
 ## Docker image
 
-PDGS runs the processor as a Docker (OCI) image (ICD Appendices D, E and F).
-The image holds the code, the Python packages (PyTorch in its CPU-only build),
-the colour AUX file and the model weights, so nothing is downloaded at run
-time. PDGS starts it with its own wrapper script, as:
+PDGS runs the processor as a Docker (OCI) image (ICD Appendices D, E and F),
+built the way PDGS built the previous version: `docker/Dockerfile-e2l1d-trixie`
+follows that build (`Dockerfile-e2cp-trixie`, image `ipf-ime-msi-l1cc:01.00`),
+with the same production base image (`python:3.14.8-slim-trixie`), user
+(`opiride`, 1100:600), virtual environment and folders. Its build context is
+the repository as a zip (`iride_eaglet_processor_v2-main.zip`, as GitHub's
+"Download ZIP" of main), the package list
+(`docker/Eaglet-2-L1D-requirements-trixie.txt`: the one of that build, plus
+scipy) and the two model weights, which go to `hf_cache/omnicloudmask/` of the
+repository in the image. Nothing is downloaded at run time. PDGS starts it with
+its own wrapper script, as:
 
 ```bash
 docker run --user 1100:600 --cpus 2 -v <WD>:<WD>:rw -w <WD> ... \
     ipf-ime-msi-l1d:01.00 EAGLET2_L1D <WD>/JobOrder.<id>.xml
 ```
 
-`EAGLET2_L1D` (`docker/EAGLET2_L1D`) is the entry point: it points the home,
-temporary and cache folders to a scratch folder in the working directory, the
-only place the processor may write (ICD 2.1), runs `process_l1c.py` with the
-Job Order, then removes the scratch folder and returns the processor's exit
-code.
+`EAGLET2_L1D`, the entry point, is a link to `process_l1c.py`, which runs in
+the image's virtual environment
+(`/opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main/process_l1c.py` works
+too).
 
 Build, test and save for delivery, on a machine with Docker and internet,
 after `python download_models.py`:
@@ -167,19 +175,19 @@ docker/test_image.sh <L1C zip> [<reference L1D zip>]  # runs it as PDGS does and
 docker/build_image.sh --save                          # dist/IPF-IME-MSI-L1D-01.00.tar.gz and its SHA-256
 ```
 
-The image tag is the processor version in `task_table.xml`. The build checks,
-as user 1100 and offline, that the processor imports and that the models run.
+`docker/build_image.sh` makes the build context in `dist/build/` (the zip is
+made from this checkout, with any changes not yet committed), builds the image
+and checks in it, as user 1100 and offline, that the processor imports and the
+models run. The image tag is the processor version in `task_table.xml`.
 `docker/test_image.sh` runs the image as user 1100:600 with only the working
 directory mounted and the Task Table's CPUs, and also with no network and a
 read-only file system, so any download, or any file written outside the
 working directory, makes it fail. It then checks the exit code, the log, the
-output's name, owner and content and, given an L1D zip made without Docker
-from the same product with the same colour method, that the L1D image is
-identical. Its working directory is under `/var/tmp/eaglet2_l1d_test`
-(`TEST_ROOT` changes it; not under `/root`, which user 1100 cannot enter).
-The Python packages are pinned in `docker/requirements-image.txt` and the
-PyTorch versions in the `Dockerfile`, as on the machine the processor was
-validated on; the build lists the image's packages in `dist/`.
+output's name, owner and content and, given an L1D zip made from the same
+product with the same colour method, that the L1D image has the same pixels
+(compared in the image). Its working directory is under
+`/var/tmp/eaglet2_l1d_test` (`TEST_ROOT` changes it; not under `/root`, which
+user 1100 cannot enter).
 
 ## PDGS interfaces
 
@@ -189,7 +197,7 @@ validated on; the build lists the image's packages in `dist/`.
 | Job Order | `job_order.py` | 3.1.2 |
 | Logging (one line per message, stdout / stderr) | `pdgs_logger.py` | 3.1.4 |
 | Exit codes | `process_l1c.py` | 3.1.5 |
-| Docker image, entry point | `Dockerfile`, `docker/EAGLET2_L1D` | Appendices D, E, F |
+| Docker image, entry point | `docker/Dockerfile-e2l1d-trixie` | Appendices D, E, F |
 
 The processor never scans its working folder: every path comes from the Job
 Order.
@@ -217,13 +225,11 @@ src/iride_eaglet_processor/
     product_xml.py          L1D header of the product XML (Enrico's template)
     colour_correction.py    LUT, class model, hybrid; the L1D image writer (COG)
     previews.py             quicklook (PNG, transparent no data) and thumbnail (JPEG) from the L1D image
-Dockerfile                  the Docker image for PDGS
-.dockerignore               what the image build may use
 docker/
-    EAGLET2_L1D             entry point in the image
-    requirements-image.txt  pinned Python packages of the image
-    build_image.sh          builds the image (and, with --save, the archive for delivery)
-    test_image.sh           validation: runs the image as PDGS does and checks the result
+    Dockerfile-e2l1d-trixie               the Docker image for PDGS, in the format of the PDGS build
+    Eaglet-2-L1D-requirements-trixie.txt  its Python packages
+    build_image.sh                        builds the image (and, with --save, the archive for delivery)
+    test_image.sh                         validation: runs the image as PDGS does and checks the result
 ```
 
 ## Acknowledgements
@@ -233,32 +239,33 @@ Cloud masking by [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask)
 
 ## Development notes
 
+Decided:
+
+- With Enrico (13 Oct 2026): the AUX files of the L1C stay as they are in
+  `AUX_DATA`; `AXE1D_CLUT` is the file type in `AUXILIARY_FILE`; the XML keeps
+  the `Rescaling_Factors` of the L1D image; the L1D name keeps the environment
+  and baseline of the L1C, not those of the Job Order.
+- The processor runs on new L1C products only (from 24 Sep 2026, with correct
+  `Rescaling_Factors`). PDGS sends a new colour AUX file through the Job Order
+  once in a while.
+- The Docker build follows the PDGS build of the previous version (Claudio,
+  13 Oct 2026); see Docker image.
+
 Open items:
 
 - `File_Type` codes: `1CSP__RGB3` in, `1DSP__RGB3` out, `AXE1D_CLUT` for the
   optional colour AUX file that overrides the built-in one, with its `Origin`
   and `Retrieval_Mode`.
-- Docker image name: `ipf-ime-msi-l1d`, archive `IPF-IME-MSI-L1D-01.00.tar.gz`,
-  after the ICD's only IME example (`IPF-IME-MSI-L0`). The naming convention
-  is in [GSNCD]: to confirm with PDGS.
+- Docker image name: `ipf-ime-msi-l1d`, after the PDGS name of the previous
+  version (`ipf-ime-msi-l1cc`); to confirm with PDGS.
 - `Executable_File_Name` in `task_table.xml`: the path of PDGS's wrapper
   script, which PDGS integration fills in (ICD Appendices E and F). The Task
-  Table has `/opt/iride/iride-pdgs-ipf-prom-ttsc/ime/scripts/eaglet2-l1d-processor`,
-  on the ICD's pattern; the script name and the constellation folder are to
-  agree with PDGS.
-- Job Order parameters: PDGS also passes `Environment` and
-  `Processing_Baseline_1DSP__RGB3` (defaults `O` and `A00`). The L1D name
-  copies them from the L1C, which gives the same name with the defaults. To
-  confirm with Enrico whether they should come from the Job Order.
-- Product XML, to confirm with Enrico: the file type in `AUXILIARY_FILE`
-  (`AXE1D_CLUT`, his example shows `AXE1D`); `Rescaling_Factors`, which he was
-  unsure about.
-- Files in the L1D product: Enrico is reviewing which to keep, remove or
-  rename, for example the files carried over from the L1C in `AUX_DATA` (the
-  `.anc.xml`, which keeps its 1CSP name, and the L1A AUX file, `AXE1A`).
-- Colour AUX file: Enrico asked for it in the folder with the products (13 Oct
-  2026). To confirm with him whether each product should also carry it in
-  `AUX_DATA`.
-- Docker test with PDGS: the image archive, the test data (an L1C product) and
-  `docker/test_image.sh`, which the ICD asks to deliver with the test data
-  (Appendix D).
+  Table has `/opt/iride/iride-pdgs-ipf-prom-ttsc/ime/scripts/eaglet2-l1d-processor`
+  as a proposal.
+- `Number_of_CPUs` 2 (about 4 minutes per product): to confirm with PDGS.
+- Colour AUX file in each product's `AUX_DATA`: Enrico said it depends on its
+  size; it is 186 KB.
+- Test data: the IME07 scene is cloud-free; a cloudy scene would test the
+  cloud mask too.
+- The documents of ICD Appendix D (processor ICD, release note, user manual):
+  needed for the test with PDGS, or later.

@@ -1,0 +1,46 @@
+# Eaglet-2 L1C to L1D processor (EAGLET2_L1D_PROC 01.00) for IRIDE PDGS, in the format of the PDGS
+# build of the previous version (Dockerfile-e2cp-trixie, image ipf-ime-msi-l1cc:01.00): the same
+# production base image, user, virtual environment and folders. Build context, as for that build
+# (docker/build_image.sh makes it in dist/build/ from the repository):
+#   iride_eaglet_processor_v2-main.zip     the repository, as GitHub's "Download ZIP" of main
+#   Eaglet-2-L1D-requirements-trixie.txt   the Python packages (docker/ in the repository)
+#   *.safetensors                          the two OmniCloudMask model weights
+# Changes from the previous version: repository and image names; scipy in the packages; libexpat1
+# (needed by rasterio); the model weights in hf_cache/omnicloudmask of the repository, where the
+# processor reads them, instead of the user's home folder; EAGLET2_L1D, the entry point; a check at
+# the end. PDGS runs it as
+#   docker run --user 1100:600 ... -v <WD>:<WD>:rw -w <WD> ipf-ime-msi-l1d:01.00 EAGLET2_L1D <WD>/JobOrder.<id>.xml
+
+#production base image bc5c1e7a2ec7
+FROM python:3.14.8-slim-trixie
+
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends unzip libexpat1
+RUN groupadd -g 600 iride && useradd  -g iride -u 1100 -m -d /opt/ipf-ime-msi-l1d opiride
+# the entry point (the task name): EAGLET2_L1D <Job Order> runs process_l1c.py
+RUN ln -s /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main/process_l1c.py /usr/local/bin/EAGLET2_L1D
+USER 1100:600
+RUN mkdir -p /opt/ipf-ime-msi-l1d/Eaglet2VEnv /opt/ipf-ime-msi-l1d/workdir
+ADD iride_eaglet_processor_v2-main.zip /opt/ipf-ime-msi-l1d/
+RUN cd /opt/ipf-ime-msi-l1d/ && unzip iride_eaglet_processor_v2-main.zip && rm iride_eaglet_processor_v2-main.zip
+ADD Eaglet-2-L1D-requirements-trixie.txt /opt/ipf-ime-msi-l1d/
+RUN python -m venv /opt/ipf-ime-msi-l1d/Eaglet2VEnv &&  /opt/ipf-ime-msi-l1d/Eaglet2VEnv/bin/pip install --upgrade pip && /opt/ipf-ime-msi-l1d/Eaglet2VEnv/bin/pip install -r  /opt/ipf-ime-msi-l1d/Eaglet-2-L1D-requirements-trixie.txt  --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu
+RUN sed -i "1s|.*|#!/opt/ipf-ime-msi-l1d/Eaglet2VEnv/bin/python3|" /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main/process_l1c.py && chmod 755 /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main/process_l1c.py \
+&& mkdir -p /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main/hf_cache/omnicloudmask/
+ADD *.safetensors /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main/hf_cache/omnicloudmask/
+ENV PATH=/opt/ipf-ime-msi-l1d/Eaglet2VEnv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1
+RUN python -m compileall -q /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main
+WORKDIR /opt/ipf-ime-msi-l1d/workdir
+
+# Check, as user 1100 and offline: the processor imports, and the models load and run with the
+# weights in the image (temporary files in a folder removed afterwards)
+RUN cd /opt/ipf-ime-msi-l1d/iride_eaglet_processor_v2-main && mkdir -p /opt/ipf-ime-msi-l1d/workdir/check \
+ && TMPDIR=/opt/ipf-ime-msi-l1d/workdir/check HF_HUB_OFFLINE=1 python -c "\
+import sys; sys.path.insert(0, 'src'); \
+import numpy as np, process_l1c; \
+from iride_eaglet_processor.inference import run_omnicloud_on_array, model_weights; \
+print('model weights:', ', '.join(p.name for p in model_weights())); \
+run_omnicloud_on_array(np.zeros((3, 64, 64), 'float32'), 'cpu'); \
+print('the processor imports and its models run offline, as user 1100')" \
+ && rm -rf /opt/ipf-ime-msi-l1d/workdir/check

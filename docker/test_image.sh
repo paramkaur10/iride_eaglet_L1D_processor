@@ -9,7 +9,8 @@
 # Makes a new working directory under $TEST_ROOT (default /var/tmp/eaglet2_l1d_test; not under
 # /root, which user 1100 cannot enter, in the container too), copies the product zip into it, writes
 # the Job Order as PDGS would, runs the image and checks the result. With a reference L1D zip, made
-# without Docker from the same product with the same colour method, the L1D image must be identical.
+# without Docker from the same product with the same colour method, the L1D image must have the same
+# pixels (compared in the image, with its Python and rasterio).
 # Unattended: prints PASS or FAIL for each check and exits with 0 only when all of them pass.
 # DOCKER=podman runs it with Podman.
 set -uo pipefail
@@ -35,6 +36,10 @@ TASK_VERSION=$(sed -n '/<Task>/,/<\/Task>/s:^ *<Version>\(.*\)</Version>.*:\1:p'
 CPUS=$(sed -n 's:^ *<Number_of_CPUs>\(.*\)</Number_of_CPUs>.*:\1:p' "$TT" | head -n 1)
 REG_EXP='^IME[0-9]{2}_1DSP__RGB3.*\.zip$'
 IMAGE="$IMAGE_NAME:$VERSION"
+if ! "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "No image $IMAGE: build it first with docker/build_image.sh" >&2
+    exit 2
+fi
 
 # --- the working directory, as PDGS prepares it ------------------------------------------------
 NAME=$(basename "$L1C")
@@ -205,9 +210,31 @@ if [ -n "$OUT" ]; then
             id=$(basename "$1" .zip)
             unzip -p "$1" "$id/$id.json" 2>/dev/null | grep -o '"eo:cloud_cover": *[0-9.eE+-]*' | head -n 1
         }
+        same_pixels() { # the L1D images in the zips $1 and $2 have the same pixels, compared in the image
+            local a b
+            a=$(basename "$1" .zip)
+            b=$(basename "$2" .zip)
+            "$DOCKER" run --rm --network none --user 1100:600 \
+                -v "$(dirname "$1"):/zips_a:ro" -v "$(dirname "$2"):/zips_b:ro" "$IMAGE" python -c '
+import sys
+import numpy as np
+import rasterio
+with rasterio.open(sys.argv[1]) as a, rasterio.open(sys.argv[2]) as b:
+    same = a.count == b.count and a.shape == b.shape and all(
+        np.array_equal(a.read(i), b.read(i)) for i in range(1, a.count + 1))
+sys.exit(0 if same else 1)' "/vsizip//zips_a/$a.zip/$a/IMG_DATA/$a.tif" "/vsizip//zips_b/$b.zip/$b/IMG_DATA/$b.tif"
+        }
         REF_SHA=$(image_sha "$REF")
-        check "L1D image identical to the one in $(basename "$REF") (SHA-256 ${IMAGE_SHA:0:12} and ${REF_SHA:0:12})" \
-            [ "$IMAGE_SHA" = "$REF_SHA" ]
+        SAME=no
+        if same_pixels "$WD/$OUT" "$REF" >/dev/null 2>&1; then
+            SAME=yes
+        fi
+        check "L1D image has the same pixels as the one in $(basename "$REF")" [ "$SAME" = yes ]
+        if [ "$IMAGE_SHA" = "$REF_SHA" ]; then
+            echo "      the two image files are identical too (SHA-256 ${IMAGE_SHA:0:12})"
+        elif [ "$SAME" = yes ]; then
+            echo "      the two image files differ in their bytes only (file layout, e.g. another GDAL version)"
+        fi
         echo "      cloud cover: this run $(cloud_cover "$WD/$OUT"), reference $(cloud_cover "$REF")"
     fi
 fi

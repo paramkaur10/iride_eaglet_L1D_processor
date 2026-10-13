@@ -23,11 +23,12 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
   * Runs on CPU only: no GPU is used, even on a machine that has one. Uses
     at most NUMBER_OF_CPUS threads, the Task Table's Number_of_CPUs, on any
     machine (Section 2.1).
+  * Writes only in the working directory (Section 2.1): temporary files
+    and library caches go to a scratch folder there, removed at the end.
   * Runs fully offline: OmniCloudMask's model weights are read from
     hf_cache/omnicloudmask, shipped with the processor (filled once by
     download_models.py), never downloaded at run time and never looked for
-    in the home folder. Required for air-gapped deployment (IRIDE PDGS),
-    where the processor runs as a user without a home folder.
+    in the home folder. Required for air-gapped deployment (IRIDE PDGS).
   * Generates a NEW L1D output product from the L1C input (naming: "1CSP"
     -> "1DSP", generation timestamp = this run's processing time). The
     original input zip is never modified or deleted. The L1D product keeps
@@ -76,6 +77,7 @@ Usage (as invoked by the PDGS wrapper script, per Appendix E):
     python process_l1c.py <absolute_path_to_JobOrder.xml>
 """
 
+import atexit
 import json
 import os
 import shutil
@@ -98,10 +100,34 @@ def _exit_255_on_uncaught_error(exc_type, exc, tb):
     traceback.print_exception(exc_type, exc, tb)
     sys.stdout.flush()
     sys.stderr.flush()
+    _remove_scratch_dir()
     os._exit(255)
 
 
 sys.excepthook = _exit_255_on_uncaught_error
+
+# --- Temporary files: in the working directory only ----------------------
+# The processor may write only in the working directory, the folder of the
+# Job Order (ICD 2.1). Libraries keep temporary files and caches in the
+# temporary folder (PyTorch keeps a cache folder there), so TMPDIR points to
+# a scratch folder in the working directory, removed when the processor
+# ends. Set before the imports below.
+_SCRATCH_DIR = None
+
+
+def _remove_scratch_dir():
+    if _SCRATCH_DIR is not None:
+        shutil.rmtree(_SCRATCH_DIR, ignore_errors=True)
+
+
+if len(sys.argv) == 2:
+    try:
+        _SCRATCH_DIR = Path(sys.argv[1]).resolve().parent / f".EAGLET2_L1D_tmp_{os.getpid()}"
+        _SCRATCH_DIR.mkdir()
+        os.environ["TMPDIR"] = str(_SCRATCH_DIR)
+        atexit.register(_remove_scratch_dir)
+    except OSError:
+        _SCRATCH_DIR = None     # e.g. no such folder: the Job Order check reports it
 
 # --- Offline Hugging Face model cache -----------------------------------
 # Must be set before importing anything that transitively imports
