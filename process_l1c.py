@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-process_l1c.py — Eaglet-2 L1C -> L1D processor: cloud masking and colour
+process_l1c.py: Eaglet-2 L1C -> L1D processor, cloud masking and colour
 correction. Task executable (repository iride_eaglet_processor_v2).
 
 PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
@@ -15,12 +15,19 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
   * Logs in the exact structured format required by Section 3.1.4:
     one-line, Syslog-style, unbuffered, on stdout (Debug/Info/Progress)
     and stderr (Warning/Error).
-  * Returns an exit code per Section 3.1.5: 0 = OK, 128-255 = FAILURE.
-  * Runs on CPU only: no GPU is used, even on a machine that has one.
-  * Runs fully offline — OmniCloudMask's model weights are loaded from a
-    local cache bundled alongside this processor (see hf_cache/ and
-    download_models.py), never downloaded at runtime. Required for
-    air-gapped deployment (IRIDE PDGS).
+  * Returns an exit code per Section 3.1.5: 0 = OK, 255 = FAILURE, also
+    for an error the processor does not catch itself (Python would exit
+    with 1, which PDGS reads as "incomplete", not as a failure).
+  * Logs "OUTPUT_READY: <file name>" for the output, the name relative to
+    the working directory (Section 3.1.4.5).
+  * Runs on CPU only: no GPU is used, even on a machine that has one. Uses
+    at most NUMBER_OF_CPUS threads, the Task Table's Number_of_CPUs, on any
+    machine (Section 2.1).
+  * Runs fully offline: OmniCloudMask's model weights are read from
+    hf_cache/omnicloudmask, shipped with the processor (filled once by
+    download_models.py), never downloaded at run time and never looked for
+    in the home folder. Required for air-gapped deployment (IRIDE PDGS),
+    where the processor runs as a user without a home folder.
   * Generates a NEW L1D output product from the L1C input (naming: "1CSP"
     -> "1DSP", generation timestamp = this run's processing time). The
     original input zip is never modified or deleted. The L1D product keeps
@@ -81,9 +88,27 @@ from pathlib import Path
 
 _PROCESSOR_ROOT = Path(__file__).resolve().parent
 
+
+# --- Exit code of an error the processor does not catch ------------------
+# Python ends with exit code 1 on an uncaught error (e.g. a package that
+# fails to import), and PDGS reads 1-127 as "incomplete" and carries on
+# (ICD 3.1.5). Such an error ends the task with 255 (EXIT_FAILURE) instead.
+# Set before the imports below.
+def _exit_255_on_uncaught_error(exc_type, exc, tb):
+    traceback.print_exception(exc_type, exc, tb)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(255)
+
+
+sys.excepthook = _exit_255_on_uncaught_error
+
 # --- Offline Hugging Face model cache -----------------------------------
 # Must be set before importing anything that transitively imports
 # huggingface_hub (i.e. before importing iride_eaglet_processor.inference).
+# The model weights are read from hf_cache/omnicloudmask (MODEL_DIR in
+# inference.py); HF_HOME keeps any Hugging Face cache file in hf_cache/ too,
+# and HF_HUB_OFFLINE makes sure nothing is ever downloaded.
 os.environ.setdefault("HF_HOME", str(_PROCESSOR_ROOT / "hf_cache"))
 os.environ["HF_HUB_OFFLINE"] = "1"
 
@@ -91,6 +116,17 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 # The processor runs strictly on CPU: no GPU is made visible to torch, even
 # on a machine that has one. Must be set before torch is imported.
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+# --- CPUs -----------------------------------------------------------------
+# The Task Table gives this task NUMBER_OF_CPUS CPUs, and the processor must
+# keep within them on any machine (ICD section 2.1): the thread pools of
+# PyTorch and of NumPy's maths libraries are sized to them, not to all the
+# cores of the machine. Must be set before numpy and torch are imported.
+NUMBER_OF_CPUS = 2      # must match Number_of_CPUs in task_table.xml
+_AVAILABLE_CPUS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+CPU_THREADS = max(1, min(NUMBER_OF_CPUS, _AVAILABLE_CPUS))
+for _name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ[_name] = str(CPU_THREADS)
 
 _SRC_DIR = _PROCESSOR_ROOT / "src"
 sys.path.insert(0, str(_SRC_DIR))
@@ -107,7 +143,7 @@ from iride_eaglet_processor.resampling import (
     downsample_to_target_resolution,
     upsample_prob_stack,
 )
-from iride_eaglet_processor.inference import run_omnicloud_on_array
+from iride_eaglet_processor.inference import run_omnicloud_on_array, limit_threads, model_weights, MODEL_DIR
 from iride_eaglet_processor.masks import (
     probs_to_four_class_map,
     probs_to_cloud_confidence,
@@ -125,13 +161,13 @@ from iride_eaglet_processor.colour_correction import (
 
 
 # --- Must match task_table.xml exactly -----------------------------------
-# TODO: confirm these registered names with PDGS integration.
-# Named after the OUTPUT level (L1D), per PDGS's own convention — see the
+# Named after the OUTPUT level (L1D), per PDGS's own convention: see the
 # HAWK_L1B_PROC example in the ICD (Section 4.1.1), which is named after
 # its output (L1B) despite consuming L0 input. No "CLM" in the names: the
 # processor does the whole L1C to L1D step, cloud mask and colour
 # correction (Enrico, 12 Oct 2026). PROCESSOR_VERSION is also written in
-# the STAC of the product (processing:software).
+# the STAC of the product (processing:software) and is the tag of the
+# Docker image.
 PROCESSOR_NAME = "EAGLET2_L1D_PROC"
 PROCESSOR_VERSION = "01.00"
 TASK_NAME = "EAGLET2_L1D"
@@ -142,7 +178,7 @@ PRODUCT_FILE_TYPE = "1CSP__RGB3"     # the L1C RGB3 product zip
 CLUT_FILE_TYPE = "AXE1D_CLUT"        # colour-correction AUX file (LUT + class model + Method)
 OWN_AUX_DIR = _PROCESSOR_ROOT / "aux"  # the processor's own AXE1D_CLUT file, used unless the Job Order gives one
 
-INFERENCE_RESOLUTION = 5.0   # m — OmniCloudMask's expected input resolution
+INFERENCE_RESOLUTION = 5.0   # m, OmniCloudMask's expected input resolution
 
 # Files already compressed are stored in the output zip as they are
 # (deflating them again costs time and saves almost nothing)
@@ -195,7 +231,14 @@ INFERENCE_DEVICE = "cpu"       # the processor runs on CPU only (see CUDA_VISIBL
 
 
 def select_device(logger):
-    logger.info(f"Inference device: {INFERENCE_DEVICE} (the processor runs on CPU only)")
+    """the CPU, used with at most CPU_THREADS threads; checks that the model weights shipped with the
+    processor are there (an error otherwise: nothing is downloaded at run time)"""
+    threads, interop_threads = limit_threads(CPU_THREADS)
+    logger.info(f"Inference device: {INFERENCE_DEVICE} (the processor runs on CPU only), {threads} threads "
+                f"(Number_of_CPUs {NUMBER_OF_CPUS}, {_AVAILABLE_CPUS} CPUs available, "
+                f"{interop_threads} inter-op threads)")
+    weights = model_weights()
+    logger.info(f"OmniCloudMask model weights: {', '.join(p.name for p in weights)} in {MODEL_DIR}")
     return INFERENCE_DEVICE
 
 
@@ -384,7 +427,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer):
     timer.mark("zip")
 
     logger.info(f"Image {orig_w} x {orig_h} pixels ({orig_w * orig_h / 1e6:.0f} Mpx), colour method "
-                f"{l1d['method']}, {os.cpu_count()} CPUs")
+                f"{l1d['method']}, {CPU_THREADS} CPU threads ({_AVAILABLE_CPUS} CPUs available)")
     logger.info(f"Processing times (s): {timer.summary()}")
     return output_zip_path
 
@@ -477,11 +520,11 @@ def main():
         clut_path = own[-1]
         logger.info(f"Colour AUX file: none in the Job Order, using the processor's own: {clut_path.name}")
 
-    device = select_device(logger)
-
     try:
+        device = select_device(logger)
         output_path = process_product(input_zip_path, clut_path, device, logger, timer)
-        logger.info(f"[Output] {output_path} OUTPUT_READY")
+        # the name relative to the working directory, as PDGS reads it (ICD 3.1.4.5)
+        logger.info(f"OUTPUT_READY: {os.path.relpath(Path(output_path).resolve(), job_order['working_dir'])}")
         logger.info(f"[Stop] exit_code={EXIT_OK}")
         sys.exit(EXIT_OK)
 

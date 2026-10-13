@@ -4,20 +4,18 @@
   correction (the L1D image is the colour-corrected RGB; the colour AUX file
   is built into the processor, and an AXE1D_CLUT input overrides it).
 
-  Several values below are PLACEHOLDERS pending confirmation from
-  Enrico / PDGS integration (Claudio) — search for "TODO" in this file.
-  Everything else follows the schema and conventions defined in
-  PDGS-ID-XPR-IRIDE-0209 (IRIDE Processor ICD Implementation Driver v2.4),
-  Section 3.1.1 and the worked example in Section 4.1.1.
+  Follows PDGS-ID-XPR-IRIDE-0209 (IRIDE Processor ICD Implementation Driver
+  v2.4), Section 3.1.1 and the worked example in Section 4.1.1, and validates
+  against its Task Table XSD (Appendix H). Values still to be confirmed with
+  PDGS integration are marked "TODO".
 -->
 <Ipf_Task_Table xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="taskTable.xsd">
-  <!-- TODO: confirm the registered Processor_Name with PDGS integration.
-       Named after the OUTPUT level (L1D), per PDGS's own convention — see
-       the HAWK_L1B_PROC example in Section 4.1.1, named after its output
-       (L1B) despite consuming L0 input. No "CLM" in the names: the
-       processor does the whole L1C to L1D step, cloud mask and colour
-       correction (Enrico, 12 Oct 2026). The Version is also written in the
-       STAC of the product (processing:software). -->
+  <!-- Named after the OUTPUT level (L1D), per PDGS's own convention: see the
+       HAWK_L1B_PROC example in Section 4.1.1, named after its output (L1B)
+       despite consuming L0 input. No "CLM" in the names: the processor does
+       the whole L1C to L1D step, cloud mask and colour correction (Enrico,
+       12 Oct 2026). The Version is also written in the STAC of the product
+       (processing:software) and is the tag of the Docker image. -->
   <Processor_Name>EAGLET2_L1D_PROC</Processor_Name>
   <Version>01.00</Version>
   <!-- Largest L1C RGB3 product observed so far is ~1.3GB. The product is
@@ -30,23 +28,59 @@
        The processor logs the time of each step ("Processing times").
        TODO: measure on the largest product and tighten -->
   <Processing_Timeout units="sec">3600</Processing_Timeout>
-  <List_of_Dyn_ProcParams count="0">
+  <!-- The cross-IPF dynamic parameters that are mandatory in every Task
+       Table (Section 3.1.2.6, Table 3-4), with the defaults given there.
+       PDGS sets them in the Job Order at run time. The processor does not
+       use them yet: the L1D product name keeps the environment (O) and the
+       baseline (A00) of the L1C. -->
+  <List_of_Dyn_ProcParams count="6">
+    <Dyn_ProcParam>
+      <Param_Name>Class_ID</Param_Name>
+      <Param_Type>String</Param_Type>
+      <Param_Default>TEST</Param_Default>
+    </Dyn_ProcParam>
+    <Dyn_ProcParam>
+      <Param_Name>Timeliness_Key</Param_Name>
+      <Param_Type>String</Param_Type>
+      <Param_Default></Param_Default>
+    </Dyn_ProcParam>
+    <Dyn_ProcParam>
+      <Param_Name>Environment</Param_Name>
+      <Param_Type>String</Param_Type>
+      <Param_Default>O</Param_Default>
+    </Dyn_ProcParam>
+    <Dyn_ProcParam>
+      <Param_Name>Processing_Baseline_1DSP__RGB3</Param_Name>
+      <Param_Type>String</Param_Type>
+      <Param_Default>A00</Param_Default>
+    </Dyn_ProcParam>
+    <Dyn_ProcParam>
+      <Param_Name>Acquisition_ID</Param_Name>
+      <Param_Type>String</Param_Type>
+      <Param_Default></Param_Default>
+    </Dyn_ProcParam>
+    <Dyn_ProcParam>
+      <Param_Name>Acquisition_Type</Param_Name>
+      <Param_Type>String</Param_Type>
+      <Param_Default>NOM</Param_Default>
+    </Dyn_ProcParam>
   </List_of_Dyn_ProcParams>
   <List_of_Pools count="1">
     <Pool>
       <Detached>false</Detached>
       <List_of_Tasks count="1">
         <Task>
-          <!-- TODO: confirm the registered Task Name with PDGS integration -->
           <Name>EAGLET2_L1D</Name>
           <Version>01.00</Version>
           <Killing_Signal>2</Killing_Signal>
           <Critical>true</Critical>
           <Criticality_Level>1</Criticality_Level>
-          <!-- TODO: PDGS integration team fills in the actual wrapper script
-               path per Appendix E, e.g.:
-               /opt/iride/iride-pdgs-ipf-prom-ttsc/<constellationID>/scripts/eaglet2-l1c-cloudmask-processor -->
-          <Executable_File_Name>eaglet2-l1c-cloudmask-processor</Executable_File_Name>
+          <!-- The absolute path of PDGS's wrapper script, which runs the
+               Docker image with the entry point EAGLET2_L1D and the Job
+               Order (Appendix E). PDGS integration fills in the final path
+               (Appendix F); this is the pattern of Appendix E, item 2.
+               TODO: agree the script name and the constellation folder -->
+          <Executable_File_Name>/opt/iride/iride-pdgs-ipf-prom-ttsc/ime/scripts/eaglet2-l1d-processor</Executable_File_Name>
           <List_of_Cfg_Files count="0">
           </List_of_Cfg_Files>
           <List_of_Inputs count="2">
@@ -110,9 +144,10 @@
             <Enable>OFF</Enable>
             <List_of_Brk_Files count="0"/>
           </Breakpoint>
-          <!-- TODO: confirm with PDGS. The processor sets no thread cap:
-               the colour correction runs on one core, the cloud mask
-               (PyTorch) and the COG writing (GDAL) use the cores available -->
+          <!-- The processor sizes its thread pools (PyTorch, NumPy's maths
+               libraries) to this number, NUMBER_OF_CPUS in process_l1c.py,
+               on any machine (Section 2.1). The colour correction runs on
+               one core. -->
           <Number_of_CPUs>2</Number_of_CPUs>
           <Posix_ExitCode>false</Posix_ExitCode>
         </Task>

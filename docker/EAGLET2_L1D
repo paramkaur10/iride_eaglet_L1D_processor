@@ -1,0 +1,22 @@
+#!/bin/sh
+# EAGLET2_L1D: the command PDGS runs in the container, <IPF_IMAGE_ENTRY_POINT> in the ICD
+# (PDGS-ID-XPR-IRIDE-0209 v2.4, Appendix E):
+#     docker run ... <image> EAGLET2_L1D <absolute path of the Job Order>
+# The processor may write only in the working directory, the folder of the Job Order (ICD 2.1).
+# HOME and the temporary, cache, config and data folders point to a scratch folder in it, so that
+# no library can write anywhere else (in PDGS the container user, 1100:600, has no home folder;
+# PyTorch, for one, keeps a cache folder in the temporary folder). The scratch folder is removed at
+# the end, and the processor's exit code is kept.
+if [ "$#" -ne 1 ]; then
+    echo "usage: EAGLET2_L1D <absolute path of the Job Order>" >&2
+    exit 255
+fi
+WD=$(dirname -- "$1")
+SCRATCH="$WD/.EAGLET2_L1D_scratch_$$"
+mkdir -p "$SCRATCH" || exit 255
+export HOME="$SCRATCH" TMPDIR="$SCRATCH" XDG_CACHE_HOME="$SCRATCH/cache" XDG_CONFIG_HOME="$SCRATCH/config" \
+       XDG_DATA_HOME="$SCRATCH/data"
+python3 /opt/eaglet2_l1d/process_l1c.py "$1"
+CODE=$?
+rm -rf "$SCRATCH"
+exit "$CODE"

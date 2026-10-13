@@ -20,18 +20,21 @@ python process_l1c.py <absolute path to JobOrder.xml>
 The Job Order gives the product zip (`1CSP__RGB3`) and the logging level. The
 colour correction uses the processor's own AUX file in `aux/`, unless the Job
 Order also lists one (`AXE1D_CLUT`), which then overrides it. The new product
-is written as `<NEW_ID>.zip` next to the input zip. No network is used at
-runtime (model weights from `hf_cache/`, see Installation and offline
-deployment).
+is written as `<NEW_ID>.zip` next to the input zip, and the log then says
+`OUTPUT_READY: <NEW_ID>.zip` (the name relative to the working directory, as
+PDGS reads it). No network is used at runtime (model weights from
+`hf_cache/omnicloudmask/`, see Installation and offline deployment). The
+processor uses at most 2 CPU threads, the `Number_of_CPUs` of the Task Table,
+on any machine.
 
 | Exit code | Meaning |
 |---|---|
 | `0` | done |
-| `255` | failure, including an unusable colour AUX file (there is no L1D image without one) |
+| `255` | failure, including an unusable colour AUX file (there is no L1D image without one), missing model weights, and any error the processor does not catch itself (Python alone would exit with 1, which PDGS reads as "incomplete") |
 
 At the end the log gives the time of each step, for example
 `Processing times (s): unzip … | read + calibrate … | cloud mask … | colour correction … | COG writing … | quicklooks … | metadata … | rename + checksums … | zip … | total …`,
-followed by the image size, the colour method and the number of CPUs.
+followed by the image size, the colour method and the number of CPU threads.
 
 ## What happens in a run
 
@@ -119,16 +122,64 @@ LUT notebook) and Enrico's script; that tool is not part of this repository.
 
 ```bash
 pip install -r requirements.txt
-python download_models.py           # once, with internet: OmniCloudMask weights into hf_cache/
+python download_models.py           # once, with internet: OmniCloudMask weights into hf_cache/omnicloudmask/
 ```
 
-`process_l1c.py` sets `HF_HOME=<repository>/hf_cache` and `HF_HUB_OFFLINE=1`
-itself, so it never goes online. Ship `hf_cache/` and `aux/` with the code:
+The processor reads the model weights from `hf_cache/omnicloudmask/`. Left to
+itself, OmniCloudMask would look for them in the home folder of the user
+running it and download them when missing; in PDGS the processor runs as a
+user without a home folder and without network. `process_l1c.py` also sets
+`HF_HOME=<repository>/hf_cache` and `HF_HUB_OFFLINE=1` itself, so it never
+goes online. Without the weights it stops with exit code 255.
+
+For PDGS the processor is delivered as a Docker image (next section). Without
+Docker, ship `hf_cache/` and `aux/` with the code:
 
 ```bash
 zip -r iride_eaglet_processor_deploy.zip process_l1c.py job_order.py pdgs_logger.py \
     product_naming.py task_table.xml requirements.txt src/ aux/ hf_cache/
 ```
+
+## Docker image
+
+PDGS runs the processor as a Docker (OCI) image (ICD Appendices D, E and F).
+The image holds the code, the Python packages (PyTorch in its CPU-only build),
+the colour AUX file and the model weights, so nothing is downloaded at run
+time. PDGS starts it with its own wrapper script, as:
+
+```bash
+docker run --user 1100:600 --cpus 2 -v <WD>:<WD>:rw -w <WD> ... \
+    ipf-ime-msi-l1d:01.00 EAGLET2_L1D <WD>/JobOrder.<id>.xml
+```
+
+`EAGLET2_L1D` (`docker/EAGLET2_L1D`) is the entry point: it points the home,
+temporary and cache folders to a scratch folder in the working directory, the
+only place the processor may write (ICD 2.1), runs `process_l1c.py` with the
+Job Order, then removes the scratch folder and returns the processor's exit
+code.
+
+Build, test and save for delivery, on a machine with Docker and internet,
+after `python download_models.py`:
+
+```bash
+docker/build_image.sh                                 # image ipf-ime-msi-l1d:01.00
+docker/test_image.sh <L1C zip> [<reference L1D zip>]  # runs it as PDGS does and checks the result
+docker/build_image.sh --save                          # dist/IPF-IME-MSI-L1D-01.00.tar.gz and its SHA-256
+```
+
+The image tag is the processor version in `task_table.xml`. The build checks,
+as user 1100 and offline, that the processor imports and that the models run.
+`docker/test_image.sh` runs the image as user 1100:600 with only the working
+directory mounted and the Task Table's CPUs, and also with no network and a
+read-only file system, so any download, or any file written outside the
+working directory, makes it fail. It then checks the exit code, the log, the
+output's name, owner and content and, given an L1D zip made without Docker
+from the same product with the same colour method, that the L1D image is
+identical. Its working directory is under `/var/tmp/eaglet2_l1d_test`
+(`TEST_ROOT` changes it; not under `/root`, which user 1100 cannot enter).
+The Python packages are pinned in `docker/requirements-image.txt` and the
+PyTorch versions in the `Dockerfile`, as on the machine the processor was
+validated on; the build lists the image's packages in `dist/`.
 
 ## PDGS interfaces
 
@@ -138,6 +189,7 @@ zip -r iride_eaglet_processor_deploy.zip process_l1c.py job_order.py pdgs_logger
 | Job Order | `job_order.py` | 3.1.2 |
 | Logging (one line per message, stdout / stderr) | `pdgs_logger.py` | 3.1.4 |
 | Exit codes | `process_l1c.py` | 3.1.5 |
+| Docker image, entry point | `Dockerfile`, `docker/EAGLET2_L1D` | Appendices D, E, F |
 
 The processor never scans its working folder: every path comes from the Job
 Order.
@@ -149,7 +201,7 @@ process_l1c.py              entry point
 job_order.py                Job Order parsing (inputs told apart by File_Type)
 pdgs_logger.py              PDGS log format
 product_naming.py           L1C -> L1D names, product rename
-download_models.py          fills hf_cache/ (once, with internet)
+download_models.py          fills hf_cache/omnicloudmask/ (once, with internet)
 task_table.xml              processor definition for PDGS
 requirements.txt
 aux/                        the colour AUX file used by default (LUT + Enrico's model + Method)
@@ -158,13 +210,20 @@ src/iride_eaglet_processor/
     calibration.py          GAIN / OFFSET from the product XML (STAC fallback); L1D values into the XML
     footprint.py            valid pixels
     resampling.py           to and from the 5 m inference grid
-    inference.py            OmniCloudMask
+    inference.py            OmniCloudMask, with the weights in hf_cache/omnicloudmask/
     masks.py                CLM and COM rasters
     stats.py                cloud statistics
     metadata.py             STAC sidecar (L1D identity, L1D image, cloud outputs, previews, checksums), CLM legend
     product_xml.py          L1D header of the product XML (Enrico's template)
     colour_correction.py    LUT, class model, hybrid; the L1D image writer (COG)
     previews.py             quicklook (PNG, transparent no data) and thumbnail (JPEG) from the L1D image
+Dockerfile                  the Docker image for PDGS
+.dockerignore               what the image build may use
+docker/
+    EAGLET2_L1D             entry point in the image
+    requirements-image.txt  pinned Python packages of the image
+    build_image.sh          builds the image (and, with --save, the archive for delivery)
+    test_image.sh           validation: runs the image as PDGS does and checks the result
 ```
 
 ## Acknowledgements
@@ -179,7 +238,18 @@ Open items:
 - `File_Type` codes: `1CSP__RGB3` in, `1DSP__RGB3` out, `AXE1D_CLUT` for the
   optional colour AUX file that overrides the built-in one, with its `Origin`
   and `Retrieval_Mode`.
-- `Executable_File_Name` in `task_table.xml`.
+- Docker image name: `ipf-ime-msi-l1d`, archive `IPF-IME-MSI-L1D-01.00.tar.gz`,
+  after the ICD's only IME example (`IPF-IME-MSI-L0`). The naming convention
+  is in [GSNCD]: to confirm with PDGS.
+- `Executable_File_Name` in `task_table.xml`: the path of PDGS's wrapper
+  script, which PDGS integration fills in (ICD Appendices E and F). The Task
+  Table has `/opt/iride/iride-pdgs-ipf-prom-ttsc/ime/scripts/eaglet2-l1d-processor`,
+  on the ICD's pattern; the script name and the constellation folder are to
+  agree with PDGS.
+- Job Order parameters: PDGS also passes `Environment` and
+  `Processing_Baseline_1DSP__RGB3` (defaults `O` and `A00`). The L1D name
+  copies them from the L1C, which gives the same name with the defaults. To
+  confirm with Enrico whether they should come from the Job Order.
 - Product XML, to confirm with Enrico: the file type in `AUXILIARY_FILE`
   (`AXE1D_CLUT`, his example shows `AXE1D`); `Rescaling_Factors`, which he was
   unsure about.
@@ -189,5 +259,6 @@ Open items:
 - Colour AUX file: Enrico asked for it in the folder with the products (13 Oct
   2026). To confirm with him whether each product should also carry it in
   `AUX_DATA`.
-- Next: the test Docker image for PDGS, with no internet access at runtime,
-  as Enrico asked.
+- Docker test with PDGS: the image archive, the test data (an L1C product) and
+  `docker/test_image.sh`, which the ICD asks to deliver with the test data
+  (Appendix D).

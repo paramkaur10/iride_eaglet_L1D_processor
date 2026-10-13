@@ -12,3 +12,4 @@ hf_cache/
 
 # local test runs
 test_wd/
+dist/
