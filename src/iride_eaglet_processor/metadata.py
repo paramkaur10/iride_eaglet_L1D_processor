@@ -28,8 +28,16 @@ CLASSIFICATION_EXTENSION_URL = (
 # The L1D image (IMG_DATA/<SCENE>.tif, STAC asset "rgb"): colour-corrected RGB,
 # COG with LZW, uint16, reflectance = value * L1D_GAIN + L1D_OFFSET, 0 = no data.
 IMAGE_ASSET = "rgb"
+IMAGE_TITLE = "Eaglet-2 Level 1D"
+IMAGE_BAND_DESCRIPTION = "Level-1D Top of Atmosphere Reflectance {} Band"   # {} = Red, Green, Blue
 COG_MEDIA_TYPE = "image/tiff; application=geotiff; profile=cloud-optimized"
 BAND_STATISTICS_KEYS = ("statistics", "raster:statistics", "raster:histogram")   # described the L1C values
+
+# L1D identity of the STAC item, as agreed for the marketplace (Rita's template
+# and Enrico's notes, 12 Oct 2026). The STAC is inherited from the L1C, so each
+# L1C value below is checked and replaced; anything else stops the processor.
+SOFTWARE_NAME = "Eaglet-2 Level 1D processor"     # processing:software, with the processor's own version
+PREVIEW_FILE_FIELDS = ("href", "type", "file:checksum", "file:size", "file:local_path")
 
 
 def compute_sha256(path):
@@ -146,7 +154,7 @@ def describe_l1d_image(stac, l1d_info, logger):
     if asset is None:
         raise KeyError(f"No '{IMAGE_ASSET}' asset in the STAC sidecar")
     asset["type"] = COG_MEDIA_TYPE
-    asset["title"] = "L1D RGB, true colour"
+    asset["title"] = IMAGE_TITLE
     asset["description"] = (
         "Colour-corrected RGB (L1D) with Sentinel-2 L1C-like colours. Method "
         f"{l1d_info['method']}, colour AUX file {l1d_info['aux_file']}. Cloud Optimized GeoTIFF, LZW (lossless). "
@@ -154,8 +162,9 @@ def describe_l1d_image(stac, l1d_info, logger):
     )
     bands = asset.get("bands") or [{"name": n, "eo:common_name": n} for n in ("red", "green", "blue")]
     dropped = set()
-    for band in bands[:3]:
+    for band, colour in zip(bands[:3], ("Red", "Green", "Blue")):
         band.update({"raster:scale": L1D_GAIN, "raster:offset": L1D_OFFSET, "nodata": 0, "data_type": "uint16"})
+        band["description"] = IMAGE_BAND_DESCRIPTION.format(colour)
         dropped.update(k for k in BAND_STATISTICS_KEYS if band.pop(k, None) is not None)
     asset["bands"] = bands
 
@@ -174,6 +183,65 @@ def describe_l1d_image(stac, l1d_info, logger):
             logger.info(f"STAC render '{name}': rescale {render.get('rescale')}")
     if dropped:
         logger.info(f"STAC '{IMAGE_ASSET}' bands: dropped {sorted(dropped)} (they described the L1C values)")
+
+
+def _level_1c_to_1d(value, old, new, what):
+    """value with its one L1C token replaced by the L1D one; an error when the token is not there exactly once"""
+    if not isinstance(value, str) or value.count(old) != 1:
+        raise ValueError(f"STAC {what}: expected exactly one '{old}' (L1C) in {value!r}")
+    return value.replace(old, new)
+
+
+def set_l1d_identity(stac, input_product_id, processor_version, logger):
+    """
+    Turns the L1C identity the STAC item inherits into the L1D one:
+      collection           IME-1CSP-RGB3 -> IME-1DSP-RGB3
+      description          "... Level 1C ..." -> "... Level 1D ..."
+      collection link      title "... L1C ..." -> "... L1D ..."
+      processing:level     L1C -> L1D
+      processing:lineage   the L1C product this L1D was made from
+      processing:software  {"Eaglet-2 Level 1D processor": <this processor's version>}
+    The L1C values are checked first: a STAC that does not have them stops the
+    processor rather than being guessed around.
+    """
+    props = stac["properties"]
+    if props.get("processing:level") != "L1C":
+        raise ValueError(f"STAC processing:level is {props.get('processing:level')!r}, expected 'L1C'")
+    stac["collection"] = _level_1c_to_1d(stac.get("collection"), "-1CSP-", "-1DSP-", "collection")
+    stac["description"] = _level_1c_to_1d(stac.get("description"), "Level 1C", "Level 1D", "description")
+    links = [link for link in stac.get("links", []) if link.get("rel") == "collection"]
+    if len(links) != 1:
+        raise ValueError(f"STAC links: expected one link with rel 'collection', found {len(links)}")
+    links[0]["title"] = _level_1c_to_1d(links[0].get("title"), "L1C", "L1D", "collection link title")
+    props["processing:level"] = "L1D"
+    props["processing:lineage"] = input_product_id
+    props["processing:software"] = {SOFTWARE_NAME: processor_version}
+    logger.info(f"STAC identity: collection {stac['collection']}, processing:level L1D, "
+                f"processing:lineage {input_product_id}, processing:software {SOFTWARE_NAME} {processor_version}")
+
+
+def point_quicklook_at_png(stac, logger):
+    """
+    The L1D preview assets are the reverse of the L1C ones: "quicklook" points
+    to the PNG (transparent where there is no data) and "thumbnail" to the
+    JPEG. In the L1C, "thumbnail" is the PNG and "quicklook" the JPEG; their
+    file fields (href, type, checksum, size, local path) are swapped, while
+    titles and roles stay with the asset. Any other layout stops the processor.
+    """
+    assets = stac["assets"]
+    thumb, quick = assets.get("thumbnail"), assets.get("quicklook")
+    if thumb is None or quick is None:
+        raise KeyError("STAC: expected both a 'thumbnail' and a 'quicklook' asset")
+    if not (str(thumb.get("href", "")).lower().endswith(".png")
+            and str(quick.get("href", "")).lower().endswith(".jpg")):
+        raise ValueError(f"STAC preview assets: expected the L1C layout (thumbnail .png, quicklook .jpg), "
+                         f"found thumbnail {thumb.get('href')!r}, quicklook {quick.get('href')!r}")
+    for key in PREVIEW_FILE_FIELDS:
+        if (key in thumb) != (key in quick):
+            raise ValueError(f"STAC preview assets: '{key}' is in only one of thumbnail and quicklook")
+        if key in thumb:
+            thumb[key], quick[key] = quick[key], thumb[key]
+    logger.info(f"STAC previews: quicklook -> {quick['href']}, thumbnail -> {thumb['href']}")
 
 
 def refresh_file_info(json_path, logger):
@@ -208,7 +276,7 @@ def refresh_file_info(json_path, logger):
 
 def enrich_sidecar_json(
     json_path, product_root, cloud_cover_pct, clm_path, com_path, legend_path,
-    profile, stats, logger, l1d_info,
+    profile, stats, logger, l1d_info, input_product_id, processor_version,
 ):
     """
     Single read-modify-write pass over the existing STAC sidecar JSON
@@ -222,6 +290,12 @@ def enrich_sidecar_json(
       - points the "rgb" asset and its renders at the L1D image
         (describe_l1d_image); file checksums and sizes are refreshed at
         the end, after the rename (refresh_file_info)
+      - gives the item its L1D identity (set_l1d_identity): collection,
+        description, collection link title, processing:level,
+        processing:lineage (input_product_id, the L1C product ID) and
+        processing:software (this processor, processor_version)
+      - points "quicklook" at the PNG and "thumbnail" at the JPEG
+        (point_quicklook_at_png), the reverse of the L1C
       - registers the classification extension in stac_extensions if not
         already present.
     """
@@ -261,6 +335,8 @@ def enrich_sidecar_json(
         description="JSON mapping of scene classification values",
     )
     describe_l1d_image(stac, l1d_info, logger)
+    set_l1d_identity(stac, input_product_id, processor_version, logger)
+    point_quicklook_at_png(stac, logger)
 
     extensions = stac.setdefault("stac_extensions", [])
     if CLASSIFICATION_EXTENSION_URL not in extensions:
@@ -271,5 +347,5 @@ def enrich_sidecar_json(
 
     logger.info(
         f"Updated sidecar JSON in place: eo:cloud_cover, assets.clm/com/clm_aux, "
-        f"assets.{IMAGE_ASSET} (L1D image) -> {json_path}"
+        f"assets.{IMAGE_ASSET} (L1D image), L1D identity, quicklook/thumbnail -> {json_path}"
     )

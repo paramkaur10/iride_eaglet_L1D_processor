@@ -1,10 +1,15 @@
-# IRIDE EAGLET-2 L1C to L1D processor, version 2
+# IRIDE EAGLET-2 L1C to L1D processor
 
 Turns an EAGLET-2 L1C RGB3 product into a new **L1D** product: the L1C layout,
 with the colour-corrected RGB (true colour) in `IMG_DATA` in place of the L1C
 image, and the cloud mask and cloud confidence map in `AUX_DATA`. Follows the
 IRIDE Processor ICD (PDGS-ID-XPR-IRIDE-0209 v2.4). The input product is never
-modified. Python 3.10 or newer, CPU or GPU.
+modified. Python 3.10 or newer. Runs on CPU only: no GPU is used, even on a
+machine that has one.
+
+Processor `EAGLET2_L1D_PROC`, task `EAGLET2_L1D`, version `01.00` (this
+repository is `iride_eaglet_processor_v2`). The same version is written in
+the STAC of every product it makes (`processing:software`).
 
 ## Run
 
@@ -12,21 +17,50 @@ modified. Python 3.10 or newer, CPU or GPU.
 python process_l1c.py <absolute path to JobOrder.xml>
 ```
 
-The Job Order is the only input: it gives the product zip (`1CSP__RGB3`), the
-colour AUX file (`AXE1D_CLUT`, mandatory) and the logging level. The new
-product is written as `<NEW_ID>.zip` next to the input zip. No network is
-used at runtime (model weights from `hf_cache/`, see Installation and offline
+The Job Order gives the product zip (`1CSP__RGB3`) and the logging level. The
+colour correction uses the processor's own AUX file in `aux/`, unless the Job
+Order also lists one (`AXE1D_CLUT`), which then overrides it. The new product
+is written as `<NEW_ID>.zip` next to the input zip. No network is used at
+runtime (model weights from `hf_cache/`, see Installation and offline
 deployment).
 
 | Exit code | Meaning |
 |---|---|
 | `0` | done |
-| `255` | failure, including a missing or unusable colour AUX file (there is no L1D image without it) |
+| `255` | failure, including an unusable colour AUX file (there is no L1D image without one) |
 
 At the end the log gives the time of each step, for example
-`Processing times (s): unzip … | read + calibrate … | cloud mask … | colour correction … | COG writing … | metadata … | rename + checksums … | zip … | total …`,
-followed by the image size, the device used for the cloud mask and the number
-of CPUs.
+`Processing times (s): unzip … | read + calibrate … | cloud mask … | colour correction … | COG writing … | quicklooks … | metadata … | rename + checksums … | zip … | total …`,
+followed by the image size, the colour method and the number of CPUs.
+
+## What happens in a run
+
+```mermaid
+flowchart TD
+    subgraph RUN["process_l1c.py"]
+        READ["Read the Job Order:<br/>the L1C product zip and,<br/>if given, a colour AUX file"]
+        READ --> HAS{"Colour AUX file<br/>in the Job Order?"}
+        HAS -->|yes| AUXJ["use it"]
+        HAS -->|no| AUXO["use the processor's<br/>own, in aux/"]
+        AUXJ --> UNZIP
+        AUXO --> UNZIP
+        UNZIP["<b>unzip</b><br/>the L1C product"]
+        UNZIP --> CAL["<b>read + calibrate</b><br/>DN to reflectance, with<br/>GAIN / OFFSET of the XML"]
+        CAL --> CLOUD["<b>cloud mask</b><br/>OmniCloudMask at 5 m,<br/>on CPU: CLM and COM"]
+        CLOUD --> COLOUR["<b>colour correction</b><br/>the AUX file's Method:<br/>LUT, CLASS_MODEL<br/>or HYBRID"]
+        COLOUR --> COG["<b>COG writing</b><br/>the L1D image, in place<br/>of the L1C image"]
+        COG --> QLK["<b>quicklooks</b><br/>PNG and JPEG from the<br/>L1D image, the KML<br/>places the PNG"]
+        QLK --> META["<b>metadata</b><br/>XML and STAC updated<br/>for the L1D product, with<br/>the generation time"]
+        META --> REN["<b>rename + checksums</b><br/>files renamed to the<br/>L1D product ID,<br/>checksums recomputed"]
+        REN --> ZIP["<b>zip</b><br/>#lt;NEW_ID#gt;.zip,<br/>next to the input zip"]
+    end
+    JO[/"JobOrder.xml, from PDGS"/] --> READ
+    ZIP --> OK(["exit 0"])
+    RUN -.->|any error| KO(["exit 255"])
+    ZIP ~~~ KO
+```
+
+The names in bold are the steps timed in the log (`Processing times`).
 
 ## Output
 
@@ -40,9 +74,9 @@ except files named after another product (`AUX_DATA/*.anc.xml`).
 | `AUX_DATA/<NEW_ID>.CLM.tif` | cloud mask, uint8: 0 no data, 1 clear, 2 thick cloud, 3 thin cloud, 4 cloud shadow |
 | `AUX_DATA/<NEW_ID>.COM.tif` | cloud confidence, uint16, confidence x 10000 |
 | `AUX_DATA/<NEW_ID>.CLM.json` | class legend |
-| `<NEW_ID>.json` | STAC: `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (2nd / 98th percentile per band); new id and times; `file:checksum` / `file:size` of every asset recomputed |
-| `<NEW_ID>.xml` | the L1C XML with `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image; nothing else changed |
-| `PREVIEW/*` | as in the L1C product, renamed |
+| `<NEW_ID>.json` | STAC: L1D identity (`collection` `IME-1DSP-RGB3`, description and collection link "Level 1D" / "L1D", `processing:level` `L1D`, `processing:lineage` = the input L1C product ID, `processing:software` `{"Eaglet-2 Level 1D processor": "01.00"}`); `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (title "Eaglet-2 Level 1D", band descriptions "Level-1D ...", COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (2nd / 98th percentile per band); `quicklook` points to the PNG and `thumbnail` to the JPEG (the reverse of the L1C); new id and times; `file:checksum` / `file:size` of every asset recomputed |
+| `<NEW_ID>.xml` | the L1C XML as in Enrico's L1D template (12 Oct 2026): `PRODUCT_ID` = `<NEW_ID>`, `PROCESSING_LEVEL` `L1D`, `GENERATION_TIME` = the generation time of the run (as in the product name and the STAC), `AUXILIARY_FILE` = only the colour AUX file used (name without `.xml`), `INPUT_PRODUCTS` = the input L1C zip, `Processor_Version` `01.00`; `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image. Everything else as in the L1C, as the template asks: element names (Level-1C), outliers, RPC |
+| `PREVIEW/*` | PNG and JPEG drawn from the L1D image, with the same names, formats and sizes as in the L1C product (one linear stretch for the three bands, 1st to 99th percentile). The PNG is RGBA, transparent where there is no data; the JPEG has no transparency, so no data is black there. The KML places the PNG on the map (the L1C one places the JPEG) |
 
 Files that are already compressed (`.tif`, `.png`, `.jpg`) are stored in the
 zip without compressing them again.
@@ -59,7 +93,13 @@ rounded `raster:scale` of the STAC file is only a fallback. DN = 0 is no data.
 
 **Configuration:** one AUX file,
 `IME___AXE1D_CLUT_20240101T000000_20990101T000000_<created>____________O_001.xml`,
-whose `<Method>` selects what the processor applies:
+with the LUT, Enrico's model and `<Method>`, which selects what the processor
+applies. The LUT is the same for every product, so the processor carries the
+file in `aux/` and uses it by default (the newest there, by the creation time
+in the name). To change the LUT or the method in operations, PDGS can give a
+newer file in the Job Order as an `AXE1D_CLUT` input: it overrides the
+processor's own. The file used is named in the log, in the image's tags and in
+the STAC description.
 
 | `<Method>` | What it does | Brightness |
 |---|---|---|
@@ -67,9 +107,10 @@ whose `<Method>` selects what the processor applies:
 | `CLASS_MODEL` | Enrico Cadau's model (`applica_L1C_RGB.py` v2, stored unchanged): water / vegetation / built-up weights from Gaussian mixtures on the RGB triplet, one transform per class | close to Sentinel-2 |
 | `HYBRID` | Enrico's colour where his model sees vegetation or water inside its training range, the LUT elsewhere | as delivered |
 
-To switch, edit `<Method>` in the file. The tables and the model are protected
-by SHA-256 checksums, `<Method>` is not. A file without `<Method>` (version 3)
-works as `LUT`.
+To switch method, edit `<Method>` in the file (the processor's own, or one
+given in the Job Order). The tables and the model are protected by SHA-256
+checksums, `<Method>` is not. A file without `<Method>` (version 3) works as
+`LUT`.
 
 The AUX file is prepared offline from the LUT (version 3 file written by the
 LUT notebook) and Enrico's script; that tool is not part of this repository.
@@ -82,11 +123,11 @@ python download_models.py           # once, with internet: OmniCloudMask weights
 ```
 
 `process_l1c.py` sets `HF_HOME=<repository>/hf_cache` and `HF_HUB_OFFLINE=1`
-itself, so it never goes online. Ship `hf_cache/` with the code:
+itself, so it never goes online. Ship `hf_cache/` and `aux/` with the code:
 
 ```bash
 zip -r iride_eaglet_processor_deploy.zip process_l1c.py job_order.py pdgs_logger.py \
-    product_naming.py task_table.xml requirements.txt src/ hf_cache/
+    product_naming.py task_table.xml requirements.txt src/ aux/ hf_cache/
 ```
 
 ## PDGS interfaces
@@ -111,6 +152,7 @@ product_naming.py           L1C -> L1D names, product rename
 download_models.py          fills hf_cache/ (once, with internet)
 task_table.xml              processor definition for PDGS
 requirements.txt
+aux/                        the colour AUX file used by default (LUT + Enrico's model + Method)
 src/iride_eaglet_processor/
     raster_reader.py        reads the product
     calibration.py          GAIN / OFFSET from the product XML (STAC fallback); L1D values into the XML
@@ -119,26 +161,33 @@ src/iride_eaglet_processor/
     inference.py            OmniCloudMask
     masks.py                CLM and COM rasters
     stats.py                cloud statistics
-    metadata.py             STAC sidecar (L1D image, cloud outputs, checksums), CLM legend
+    metadata.py             STAC sidecar (L1D identity, L1D image, cloud outputs, previews, checksums), CLM legend
+    product_xml.py          L1D header of the product XML (Enrico's template)
     colour_correction.py    LUT, class model, hybrid; the L1D image writer (COG)
+    previews.py             quicklook (PNG, transparent no data) and thumbnail (JPEG) from the L1D image
 ```
-
-## Open items (to confirm with Enrico / PDGS)
-
-- `Processor_Name` / `Task_Name` (`EAGLET2_L1D_CLM_PROC` / `EAGLET2_L1D_CLM`)
-  still say CLM although the processor now also corrects colours.
-- `File_Type` codes: `1CSP__RGB3` in, `1DSP__RGB3` out, `AXE1D_CLUT` for the
-  colour AUX file (mandatory), with its `Origin` and `Retrieval_Mode`.
-- `PREVIEW`: still the L1C quicklook and thumbnail; to regenerate from the L1D
-  image?
-- The XML is the L1C one apart from `Rescaling_Factors` and the image checksum
-  (Level-1C element names, the L1C product name inside, `NUMBER_OF_OUTLIERS`
-  computed on the L1C).
-- `Executable_File_Name` in `task_table.xml`.
-- `Min_Disk_Space` (8192 MB) and `Processing_Timeout` (3600 s), to be measured
-  on the largest product.
 
 ## Acknowledgements
 
 Cloud masking by [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask)
 (MIT License).
+
+## Development notes
+
+Open items:
+
+- `File_Type` codes: `1CSP__RGB3` in, `1DSP__RGB3` out, `AXE1D_CLUT` for the
+  optional colour AUX file that overrides the built-in one, with its `Origin`
+  and `Retrieval_Mode`.
+- `Executable_File_Name` in `task_table.xml`.
+- Product XML, to confirm with Enrico: the file type in `AUXILIARY_FILE`
+  (`AXE1D_CLUT`, his example shows `AXE1D`); `Rescaling_Factors`, which he was
+  unsure about.
+- Files in the L1D product: Enrico is reviewing which to keep, remove or
+  rename, for example the files carried over from the L1C in `AUX_DATA` (the
+  `.anc.xml`, which keeps its 1CSP name, and the L1A AUX file, `AXE1A`).
+- Colour AUX file: Enrico asked for it in the folder with the products (13 Oct
+  2026). To confirm with him whether each product should also carry it in
+  `AUX_DATA`.
+- Next: the test Docker image for PDGS, with no internet access at runtime,
+  as Enrico asked.

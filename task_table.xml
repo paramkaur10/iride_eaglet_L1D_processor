@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Task Table for the Eaglet-2 L1C -> L1D processor: cloud masking and colour
-  correction (version 2: the L1D image is the colour-corrected RGB, made with
-  the AXE1D_CLUT AUX input).
+  correction (the L1D image is the colour-corrected RGB; the colour AUX file
+  is built into the processor, and an AXE1D_CLUT input overrides it).
 
   Several values below are PLACEHOLDERS pending confirmation from
   Enrico / PDGS integration (Claudio) — search for "TODO" in this file.
@@ -14,9 +14,12 @@
   <!-- TODO: confirm the registered Processor_Name with PDGS integration.
        Named after the OUTPUT level (L1D), per PDGS's own convention — see
        the HAWK_L1B_PROC example in Section 4.1.1, named after its output
-       (L1B) despite consuming L0 input. -->
-  <Processor_Name>EAGLET2_L1D_CLM_PROC</Processor_Name>
-  <Version>02.00</Version>
+       (L1B) despite consuming L0 input. No "CLM" in the names: the
+       processor does the whole L1C to L1D step, cloud mask and colour
+       correction (Enrico, 12 Oct 2026). The Version is also written in the
+       STAC of the product (processing:software). -->
+  <Processor_Name>EAGLET2_L1D_PROC</Processor_Name>
+  <Version>01.00</Version>
   <!-- Largest L1C RGB3 product observed so far is ~1.3GB. The product is
        held unzipped, renamed and re-zipped; the L1D image is first written
        as a plain GeoTIFF (uint16, 3 bands), then as the COG that replaces
@@ -35,8 +38,8 @@
       <List_of_Tasks count="1">
         <Task>
           <!-- TODO: confirm the registered Task Name with PDGS integration -->
-          <Name>EAGLET2_L1D_CLM</Name>
-          <Version>02.00</Version>
+          <Name>EAGLET2_L1D</Name>
+          <Version>01.00</Version>
           <Killing_Signal>2</Killing_Signal>
           <Critical>true</Critical>
           <Criticality_Level>1</Criticality_Level>
@@ -67,12 +70,13 @@
             <!-- Colour-correction AUX file (IME___AXE1D_CLUT_<validity start>_
                  <validity stop>_<creation>____________O_001.xml): the LUT,
                  Enrico's class model and the <Method> that selects one.
-                 Mandatory: the L1D image in IMG_DATA is made with it.
+                 Optional: the processor carries its own in aux/ and uses it
+                 by default; a file given here overrides it.
                  TODO: confirm with PDGS integration the File_Type code,
                  Origin and Retrieval_Mode for auxiliary files -->
             <Input>
               <Mode>ALWAYS</Mode>
-              <Mandatory>Yes</Mandatory>
+              <Mandatory>No</Mandatory>
               <List_of_Alternatives count="1">
                 <Alternative>
                   <Order>1</Order>

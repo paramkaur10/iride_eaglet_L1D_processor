@@ -3,3 +3,4 @@ scipy
 rasterio
 torch
 omnicloudmask
+pillow

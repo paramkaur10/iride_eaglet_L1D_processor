@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 process_l1c.py — Eaglet-2 L1C -> L1D processor: cloud masking and colour
-correction. Task executable (version 2).
+correction. Task executable (repository iride_eaglet_processor_v2).
 
 PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
   * Accepts exactly one command-line argument: the absolute path to the
@@ -16,6 +16,7 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
     one-line, Syslog-style, unbuffered, on stdout (Debug/Info/Progress)
     and stderr (Warning/Error).
   * Returns an exit code per Section 3.1.5: 0 = OK, 128-255 = FAILURE.
+  * Runs on CPU only: no GPU is used, even on a machine that has one.
   * Runs fully offline — OmniCloudMask's model weights are loaded from a
     local cache bundled alongside this processor (see hf_cache/ and
     download_models.py), never downloaded at runtime. Required for
@@ -33,17 +34,33 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
         AUX_DATA/<NEW_ID>.CLM.json   class legend
         <NEW_ID>.json                updated: eo:cloud_cover, clm/com/clm_aux,
                                      the rgb asset and its renders describing the
-                                     L1D image, id, created/updated, asset hrefs,
+                                     L1D image, the L1D identity (collection,
+                                     description, processing:level L1D,
+                                     processing:lineage = the input L1C product,
+                                     processing:software = this processor and
+                                     version), quicklook -> PNG and thumbnail ->
+                                     JPEG, id, created/updated, asset hrefs,
                                      file checksums and sizes
-        <NEW_ID>.xml                 the L1C XML, with Rescaling_Factors (GAIN
-                                     0.0001, OFFSET -0.1) and the image SHA-256
-                                     set for the L1D image
+        <NEW_ID>.xml                 the L1C XML as in Enrico's L1D template:
+                                     PRODUCT_ID = <NEW_ID>, PROCESSING_LEVEL L1D,
+                                     GENERATION_TIME = this run's generation time,
+                                     AUXILIARY_FILE = only the colour AUX file,
+                                     INPUT_PRODUCTS = the input L1C zip,
+                                     Processor_Version = this processor's; and
+                                     Rescaling_Factors (GAIN 0.0001, OFFSET -0.1)
+                                     and the image SHA-256 set for the L1D image
+        PREVIEW/<NEW_ID>.QLK.*       PNG and JPEG drawn from the L1D image (same
+                                     names, formats and sizes as in the L1C);
+                                     the PNG is RGBA, transparent where there is
+                                     no data; the KML places the PNG on the map
+                                     (the L1C one places the JPEG)
     packaged as <NEW_ID>.zip in the same working directory.
-  * The colour correction is configured by the AUX file of type AXE1D_CLUT
-    given in the Job Order (IME___AXE1D_CLUT_....xml): its <Method> element
-    selects the LUT, Enrico's class model (CLASS_MODEL) or the HYBRID of the
-    two. There is no L1D image without it, so a missing or unusable AUX file
-    is a failure (exit code 255).
+  * The colour correction is configured by an AUX file of type AXE1D_CLUT
+    (IME___AXE1D_CLUT_....xml: the LUT, Enrico's class model, and <Method>,
+    which selects LUT, CLASS_MODEL or HYBRID). The processor carries its own
+    in aux/ and uses it by default (the newest, by the creation time in the
+    name); an AXE1D_CLUT file given in the Job Order overrides it. Without a
+    usable AUX file there is no L1D image: exit code 255.
   * Calibration (DN * gain + offset) comes from the product XML's
     Rescaling_Factors, for the cloud mask and the colour step alike.
   * Logs the time spent in each step at the end ("Processing times").
@@ -70,11 +87,15 @@ _PROCESSOR_ROOT = Path(__file__).resolve().parent
 os.environ.setdefault("HF_HOME", str(_PROCESSOR_ROOT / "hf_cache"))
 os.environ["HF_HUB_OFFLINE"] = "1"
 
+# --- CPU only -------------------------------------------------------------
+# The processor runs strictly on CPU: no GPU is made visible to torch, even
+# on a machine that has one. Must be set before torch is imported.
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 _SRC_DIR = _PROCESSOR_ROOT / "src"
 sys.path.insert(0, str(_SRC_DIR))
 
 import numpy as np
-import torch
 
 from job_order import parse_job_order, JobOrderError
 from pdgs_logger import PdgsLogger
@@ -96,6 +117,8 @@ from iride_eaglet_processor.masks import (
 from iride_eaglet_processor.stats import compute_cloud_stats
 from iride_eaglet_processor.metadata import save_clm_legend, enrich_sidecar_json, refresh_file_info
 from iride_eaglet_processor.calibration import find_product_xml, set_l1d_image_in_xml
+from iride_eaglet_processor.product_xml import set_l1d_header_in_xml
+from iride_eaglet_processor.previews import make_l1d_previews, point_kml_at_renamed_files
 from iride_eaglet_processor.colour_correction import (
     ColourCorrection, write_colour_product, L1D_GAIN, L1D_OFFSET,
 )
@@ -105,15 +128,19 @@ from iride_eaglet_processor.colour_correction import (
 # TODO: confirm these registered names with PDGS integration.
 # Named after the OUTPUT level (L1D), per PDGS's own convention — see the
 # HAWK_L1B_PROC example in the ICD (Section 4.1.1), which is named after
-# its output (L1B) despite consuming L0 input.
-PROCESSOR_NAME = "EAGLET2_L1D_CLM_PROC"
-PROCESSOR_VERSION = "02.00"
-TASK_NAME = "EAGLET2_L1D_CLM"
-TASK_VERSION = "02.00"
+# its output (L1B) despite consuming L0 input. No "CLM" in the names: the
+# processor does the whole L1C to L1D step, cloud mask and colour
+# correction (Enrico, 12 Oct 2026). PROCESSOR_VERSION is also written in
+# the STAC of the product (processing:software).
+PROCESSOR_NAME = "EAGLET2_L1D_PROC"
+PROCESSOR_VERSION = "01.00"
+TASK_NAME = "EAGLET2_L1D"
+TASK_VERSION = "01.00"
 
 # Job Order input types (must match task_table.xml)
 PRODUCT_FILE_TYPE = "1CSP__RGB3"     # the L1C RGB3 product zip
-CLUT_FILE_TYPE = "AXE1D_CLUT"        # colour-correction AUX file (LUT + class model + Method), mandatory
+CLUT_FILE_TYPE = "AXE1D_CLUT"        # colour-correction AUX file (LUT + class model + Method)
+OWN_AUX_DIR = _PROCESSOR_ROOT / "aux"  # the processor's own AXE1D_CLUT file, used unless the Job Order gives one
 
 INFERENCE_RESOLUTION = 5.0   # m — OmniCloudMask's expected input resolution
 
@@ -164,12 +191,12 @@ def zip_product(product_root, output_zip_path, logger):
     logger.info(f"Wrote: {output_zip_path}")
 
 
+INFERENCE_DEVICE = "cpu"       # the processor runs on CPU only (see CUDA_VISIBLE_DEVICES above)
+
+
 def select_device(logger):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Inference device: {device}")
-    if device == "cpu":
-        logger.warning("No CUDA GPU available — running on CPU (slower).")
-    return device
+    logger.info(f"Inference device: {INFERENCE_DEVICE} (the processor runs on CPU only)")
+    return INFERENCE_DEVICE
 
 
 class StepTimer:
@@ -229,7 +256,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer):
     (per Enrico/Paola's confirmed naming convention) and packaged as a
     NEW output zip in the same working directory. The original input zip
     is never modified or deleted.
-    clut_path: the colour-correction AUX file from the Job Order.
+    clut_path: the colour-correction AUX file (the Job Order's, or the processor's own).
     Returns the output zip path.
     """
     working_dir = input_zip_path.parent
@@ -314,27 +341,36 @@ def process_product(input_zip_path, clut_path, device, logger, timer):
     l1d = make_l1d_image(product, clut_path, logger)
     timer.mark("colour correction", last_part=("COG writing", l1d["seconds_cog"]))
 
+    # --- quicklooks drawn from the L1D image ---------------------------------------
+    make_l1d_previews(old_product_root, product["tif_path"], logger)
+    timer.mark("quicklooks")
+
+    # --- the new L1D product ID (generation time = now): the XML header names it ---------
+    generation_time = datetime.now(timezone.utc)
+    new_scene_id = derive_output_product_id(old_scene_id, generation_time=generation_time)
+
     # --- metadata of the L1D product: XML and STAC -----------------------------------
     with open(json_path) as f:
         xml_path = find_product_xml(old_product_root, json.load(f))
     if xml_path is None:
-        logger.warning("No product XML: no Rescaling_Factors or image checksum to update")
+        logger.warning("No product XML: no Rescaling_Factors, image checksum or L1D header to update")
     else:
         set_l1d_image_in_xml(xml_path, product["tif_path"], L1D_GAIN, L1D_OFFSET, logger)
+        set_l1d_header_in_xml(xml_path, old_scene_id, new_scene_id, generation_time, input_zip_path.name,
+                              clut_path, PROCESSOR_VERSION, logger)
 
     enrich_sidecar_json(
         json_path, old_product_root, cloud_cover_pct, clm_path, com_path, legend_path,
         profile, stats, logger, l1d_info=l1d,
+        input_product_id=old_scene_id, processor_version=PROCESSOR_VERSION,
     )
     timer.mark("metadata")
 
     # --- rename the whole product to the new L1D naming ---------------------------
-    generation_time = datetime.now(timezone.utc)
-    new_scene_id = derive_output_product_id(old_scene_id, generation_time=generation_time)
-
     new_product_root = rename_product_in_place(old_product_root, old_scene_id, new_scene_id, logger)
     new_json_path = new_product_root / f"{new_scene_id}.json"
     update_json_references(new_json_path, old_scene_id, new_scene_id, generation_time, logger)
+    point_kml_at_renamed_files(new_product_root, old_scene_id, new_scene_id, logger)
     refresh_file_info(new_json_path, logger)
     timer.mark("rename + checksums")
 
@@ -348,7 +384,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer):
     timer.mark("zip")
 
     logger.info(f"Image {orig_w} x {orig_h} pixels ({orig_w * orig_h / 1e6:.0f} Mpx), colour method "
-                f"{l1d['method']}, cloud mask on {device}, {os.cpu_count()} CPUs")
+                f"{l1d['method']}, {os.cpu_count()} CPUs")
     logger.info(f"Processing times (s): {timer.summary()}")
     return output_zip_path
 
@@ -419,17 +455,27 @@ def main():
         logger.info(f"[Stop] exit_code={EXIT_FAILURE}")
         sys.exit(EXIT_FAILURE)
 
-    # Colour-correction AUX file: mandatory, the L1D image is made with it.
-    # With several, the newest (latest creation time in the file name) is used.
+    # Colour-correction AUX file: the one in the Job Order if PDGS gives one (the
+    # newest, by name, if several), otherwise the processor's own in aux/.
     clut_inputs = sorted(by_type.get(CLUT_FILE_TYPE, []), key=lambda p: p.name)
-    clut_path = clut_inputs[-1] if clut_inputs else None
-    if len(clut_inputs) > 1:
-        logger.warning(f"{len(clut_inputs)} {CLUT_FILE_TYPE} files in the Job Order; using the newest: {clut_path.name}")
-    if clut_path is None or not clut_path.exists():
-        what = "none in the Job Order" if clut_path is None else f"declared file does not exist: {clut_path}"
-        logger.error(f"No colour-correction AUX file ({CLUT_FILE_TYPE}), so no L1D image can be made: {what}")
-        logger.info(f"[Stop] exit_code={EXIT_FAILURE}")
-        sys.exit(EXIT_FAILURE)
+    if clut_inputs:
+        clut_path = clut_inputs[-1]
+        if len(clut_inputs) > 1:
+            logger.warning(f"{len(clut_inputs)} {CLUT_FILE_TYPE} files in the Job Order; using the newest: {clut_path.name}")
+        if not clut_path.exists():
+            logger.error(f"Declared {CLUT_FILE_TYPE} file does not exist: {clut_path}")
+            logger.info(f"[Stop] exit_code={EXIT_FAILURE}")
+            sys.exit(EXIT_FAILURE)
+        logger.info(f"Colour AUX file from the Job Order: {clut_path.name}")
+    else:
+        own = sorted(OWN_AUX_DIR.glob(f"IME___{CLUT_FILE_TYPE}_*.xml"), key=lambda p: p.name)
+        if not own:
+            logger.error(f"No colour-correction AUX file ({CLUT_FILE_TYPE}): none in the Job Order and none "
+                         f"in {OWN_AUX_DIR}, so no L1D image can be made")
+            logger.info(f"[Stop] exit_code={EXIT_FAILURE}")
+            sys.exit(EXIT_FAILURE)
+        clut_path = own[-1]
+        logger.info(f"Colour AUX file: none in the Job Order, using the processor's own: {clut_path.name}")
 
     device = select_device(logger)
 
