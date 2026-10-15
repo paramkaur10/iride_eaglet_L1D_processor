@@ -10,8 +10,11 @@ Transformation:
   - "1CSP" -> "1DSP" (processing level token: L1C -> new L1D)
   - 3rd timestamp segment (generation time) replaced with the actual
     processing time of THIS run, not copied from the input
-  - Sensing start/stop (1st, 2nd timestamps) and every trailing segment
-    (orbit numbers, observation direction, baseline) are preserved as-is
+  - Sensing start/stop (1st, 2nd timestamps) and the orbit numbers are
+    preserved as-is
+  - Environment and processing baseline (the last two segments, e.g. O and
+    A00) come from the Job Order (Environment, Processing_Baseline_1DSP__RGB3),
+    as Enrico confirmed on 14 Oct 2026; without them, those of the L1C are kept
 """
 
 import re
@@ -25,8 +28,13 @@ PRODUCT_ID_PATTERN = re.compile(
     r"(?P<t_start>\d{8}T\d{6})_"
     r"(?P<t_stop>\d{8}T\d{6})_"
     r"(?P<t_gen>\d{8}T\d{6})_"
-    r"(?P<trailer>.+)$"
+    r"(?P<orbits>.+)_"
+    r"(?P<environment>[A-Z])_"
+    r"(?P<baseline>[A-Z0-9]{3})$"
 )
+
+ENVIRONMENT_PATTERN = re.compile(r"^[A-Z]$")
+BASELINE_PATTERN = re.compile(r"^[A-Z0-9]{3}$")
 
 NEW_LEVEL_TOKEN = "1DSP"
 
@@ -35,12 +43,14 @@ class ProductNamingError(Exception):
     pass
 
 
-def derive_output_product_id(input_product_id, generation_time=None):
+def derive_output_product_id(input_product_id, generation_time=None, environment=None, baseline=None):
     """
     input_product_id: the L1C product ID (no .zip extension), e.g.
         "IME08_1CSP__RGB3_20260921T070225_20260921T070227_20260921T130751_04048_R020_O_A00"
     generation_time: datetime to use as the new generation timestamp;
         defaults to now (UTC).
+    environment, baseline: from the Job Order (e.g. "O", "A00"); None keeps
+        those of the input product. A value of the wrong form is an error.
 
     Returns the derived L1D product ID string.
     """
@@ -51,6 +61,15 @@ def derive_output_product_id(input_product_id, generation_time=None):
             f"naming convention: {input_product_id}"
         )
 
+    if environment is None:
+        environment = match.group("environment")
+    if baseline is None:
+        baseline = match.group("baseline")
+    if not ENVIRONMENT_PATTERN.match(environment):
+        raise ProductNamingError(f"Environment must be one capital letter, got '{environment}'")
+    if not BASELINE_PATTERN.match(baseline):
+        raise ProductNamingError(f"Processing baseline must be 3 capital letters or digits, got '{baseline}'")
+
     if generation_time is None:
         generation_time = datetime.now(timezone.utc)
     new_gen_str = generation_time.strftime("%Y%m%dT%H%M%S")
@@ -58,7 +77,7 @@ def derive_output_product_id(input_product_id, generation_time=None):
     output_id = (
         f"{match.group('mission')}_{NEW_LEVEL_TOKEN}__RGB3_"
         f"{match.group('t_start')}_{match.group('t_stop')}_"
-        f"{new_gen_str}_{match.group('trailer')}"
+        f"{new_gen_str}_{match.group('orbits')}_{environment}_{baseline}"
     )
     return output_id
 
@@ -69,6 +88,8 @@ if __name__ == "__main__":
     result = derive_output_product_id(example_input, generation_time=test_gen_time)
     expected = "IME08_1DSP__RGB3_20260921T070225_20260921T070227_20260921T130751_04048_R020_O_A00"
     assert result == expected, f"Mismatch:\n  got:      {result}\n  expected: {expected}"
+    other = derive_output_product_id(example_input, test_gen_time, environment="T", baseline="B01")
+    assert other.endswith("_04048_R020_T_B01"), other
     print("Self-test passed:", result)
 
 
@@ -78,7 +99,7 @@ if __name__ == "__main__":
 #
 # Files that do NOT contain the exact old product ID as a substring (e.g.
 # AUX_DATA/*.anc.xml, which references a different upstream ancillary
-# product with its own distinct ID) are left completely untouched — this
+# product with its own distinct ID) are left completely untouched; this
 # falls out naturally from doing a substring match/replace per filename,
 # no special-casing needed.
 # ---------------------------------------------------------------------------

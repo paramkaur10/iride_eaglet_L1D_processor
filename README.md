@@ -69,8 +69,12 @@ The names in bold are the steps timed in the log (`Processing times`).
 
 ## Output
 
-`<NEW_ID>` is the input ID with `1CSP` changed to `1DSP` and the generation
-time set to the time of the run. Every file in the product is renamed to it,
+`<NEW_ID>` is the input ID with `1CSP` changed to `1DSP`, the generation
+time set to the time of the run, and the environment and processing baseline
+(the last two parts, e.g. `O_A00`) taken from the Job Order (`Environment`,
+`Processing_Baseline_1DSP__RGB3`). If the Job Order leaves one out or empty,
+the L1C's is kept, with a warning; a value of the wrong form (not one capital
+letter, not three capital letters or digits) stops the run with exit code 255. Every file in the product is renamed to it,
 except files named after another product (`AUX_DATA/*.anc.xml`).
 
 | In the L1D product | Content |
@@ -243,8 +247,9 @@ Decided:
 
 - With Enrico (13 Oct 2026): the AUX files of the L1C stay as they are in
   `AUX_DATA`; `AXE1D_CLUT` is the file type in `AUXILIARY_FILE`; the XML keeps
-  the `Rescaling_Factors` of the L1D image; the L1D name keeps the environment
-  and baseline of the L1C, not those of the Job Order.
+  the `Rescaling_Factors` of the L1D image.
+- With Enrico (14 Oct 2026): the L1D name takes the environment and
+  processing baseline from the Job Order.
 - The processor runs on new L1C products only (from 24 Sep 2026, with correct
   `Rescaling_Factors`). PDGS sends a new colour AUX file through the Job Order
   once in a while.

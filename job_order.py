@@ -8,7 +8,7 @@ The Job Order tells us, per the ICD:
   - the input file(s) to process (List_of_Ipf_Procs/Ipf_Proc/List_of_Inputs)
   - where output is expected (List_of_Outputs)
 
-We deliberately do NOT scan the working directory for input files — the
+We deliberately do NOT scan the working directory for input files: the
 ICD is explicit that a processor "must rely on the paths specified in the
 JobOrder, trusting that they exist as volumes mounted at container
 runtime," not make assumptions about paths.
@@ -28,12 +28,13 @@ def parse_job_order(job_order_path, task_name, task_version, logger=None):
       logging_level    str, one of DEBUG/INFO/PROGRESS/WARNING/ERROR
       working_dir       Path, the directory containing the Job Order file
       input_files       list[Path], absolute paths of every input file
-                        found for this task, whatever its type
+                        found for this task, in Job Order order
       inputs_by_type    dict File_Type -> list[Path], the same files grouped
-                        by the File_Type of their <Input> (None when an
-                        <Input> has no File_Type): the L1C product
-                        ("1CSP__RGB3") and the colour-correction AUX file
-                        ("AXE1D_CLUT") are told apart this way
+                        by their <Input>'s File_Type (e.g. "1CSP__RGB3" for
+                        the product, "AXE1D_CLUT" for the colour LUT);
+                        files of an <Input> without File_Type are under ""
+      dyn_params        dict Name -> Value of Ipf_Conf/List_of_Dyn_Processing_Parameters
+                        (e.g. "Environment" -> "O"); an empty value is ""
       output_spec       dict describing the single declared Output
                         (destination, file_type, file_name, reg_exp), for
                         reference / future use
@@ -58,6 +59,12 @@ def parse_job_order(job_order_path, task_name, task_version, logger=None):
     logging_level_el = ipf_conf.find("Logging_Level")
     logging_level = logging_level_el.text.strip() if logging_level_el is not None and logging_level_el.text else "INFO"
 
+    dyn_params = {}
+    for param_el in ipf_conf.findall("./List_of_Dyn_Processing_Parameters/Dyn_Processing_Parameter"):
+        name = _text(param_el, "Name")
+        if name:
+            dyn_params[name] = _text(param_el, "Value") or ""
+
     # Find our task's section within the Job Order. A Job Order can contain
     # directives for multiple tasks; we must identify our own by
     # {Task_Name, Task_Version}, per the ICD.
@@ -80,7 +87,7 @@ def parse_job_order(job_order_path, task_name, task_version, logger=None):
     input_files = []
     inputs_by_type = {}
     for input_el in matching_proc.findall("./List_of_Inputs/Input"):
-        file_type = _text(input_el, "File_Type")
+        file_type = _text(input_el, "File_Type") or ""
         for file_name_el in input_el.findall("./List_of_File_Names/File_Name"):
             if file_name_el.text and file_name_el.text.strip():
                 path = Path(file_name_el.text.strip())
@@ -109,6 +116,7 @@ def parse_job_order(job_order_path, task_name, task_version, logger=None):
         "working_dir": working_dir,
         "input_files": input_files,
         "inputs_by_type": inputs_by_type,
+        "dyn_params": dyn_params,
         "output_spec": output_spec,
     }
 
@@ -116,8 +124,10 @@ def parse_job_order(job_order_path, task_name, task_version, logger=None):
         logger.info(f"Job Order parsed: {job_order_path}")
         logger.info(f"Logging level: {logging_level}")
         logger.info(f"Working directory: {working_dir}")
+        for name, value in dyn_params.items():
+            logger.info(f"Dynamic parameter {name}: '{value}'")
         for file_type, paths in inputs_by_type.items():
-            logger.info(f"Input file(s) of type {file_type}: {[str(p) for p in paths]}")
+            logger.info(f"Input file(s) of type {file_type or '(none)'}: {[str(p) for p in paths]}")
 
     return result
 

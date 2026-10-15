@@ -30,7 +30,8 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
     download_models.py), never downloaded at run time and never looked for
     in the home folder. Required for air-gapped deployment (IRIDE PDGS).
   * Generates a NEW L1D output product from the L1C input (naming: "1CSP"
-    -> "1DSP", generation timestamp = this run's processing time). The
+    -> "1DSP", generation timestamp = this run's processing time, environment
+    and baseline from the Job Order). The
     original input zip is never modified or deleted. The L1D product keeps
     the L1C layout, renamed throughout to the new L1D product ID, with:
         IMG_DATA/<NEW_ID>.tif        the L1D image, in place of the L1C one:
@@ -161,7 +162,8 @@ import numpy as np
 
 from job_order import parse_job_order, JobOrderError
 from pdgs_logger import PdgsLogger
-from product_naming import derive_output_product_id, rename_product_in_place, update_json_references
+from product_naming import (derive_output_product_id, rename_product_in_place, update_json_references,
+                            ProductNamingError)
 
 from iride_eaglet_processor.raster_reader import read_product, NODATA_VALUE
 from iride_eaglet_processor.footprint import get_valid_footprint
@@ -201,6 +203,7 @@ TASK_VERSION = "01.00"
 
 # Job Order input types (must match task_table.xml)
 PRODUCT_FILE_TYPE = "1CSP__RGB3"     # the L1C RGB3 product zip
+OUTPUT_FILE_TYPE = "1DSP__RGB3"      # the L1D product zip (Processing_Baseline_<this> in the Job Order)
 CLUT_FILE_TYPE = "AXE1D_CLUT"        # colour-correction AUX file (LUT + class model + Method)
 OWN_AUX_DIR = _PROCESSOR_ROOT / "aux"  # the processor's own AXE1D_CLUT file, used unless the Job Order gives one
 
@@ -317,7 +320,7 @@ def make_l1d_image(product, clut_path, logger):
     return info
 
 
-def process_product(input_zip_path, clut_path, device, logger, timer):
+def process_product(input_zip_path, clut_path, device, logger, timer, environment=None, baseline=None):
     """
     input_zip_path: absolute Path to the L1C RGB3 product zip, as supplied
     by the Job Order. Extracted and enriched under its original (L1C)
@@ -326,6 +329,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer):
     NEW output zip in the same working directory. The original input zip
     is never modified or deleted.
     clut_path: the colour-correction AUX file (the Job Order's, or the processor's own).
+    environment, baseline: for the L1D name, from the Job Order (None keeps the L1C's).
     Returns the output zip path.
     """
     working_dir = input_zip_path.parent
@@ -416,7 +420,8 @@ def process_product(input_zip_path, clut_path, device, logger, timer):
 
     # --- the new L1D product ID (generation time = now): the XML header names it ---------
     generation_time = datetime.now(timezone.utc)
-    new_scene_id = derive_output_product_id(old_scene_id, generation_time=generation_time)
+    new_scene_id = derive_output_product_id(old_scene_id, generation_time=generation_time,
+                                            environment=environment, baseline=baseline)
 
     # --- metadata of the L1D product: XML and STAC -----------------------------------
     with open(json_path) as f:
@@ -546,9 +551,26 @@ def main():
         clut_path = own[-1]
         logger.info(f"Colour AUX file: none in the Job Order, using the processor's own: {clut_path.name}")
 
+    # Environment and processing baseline of the L1D name: from the Job Order (Enrico,
+    # 14 Oct 2026); if PDGS leaves one out or empty, the L1C's is kept, with a warning
+    dyn = job_order["dyn_params"]
+    environment = dyn.get("Environment") or None
+    baseline = dyn.get(f"Processing_Baseline_{OUTPUT_FILE_TYPE}") or None
+    for label, value in (("Environment", environment), (f"Processing_Baseline_{OUTPUT_FILE_TYPE}", baseline)):
+        if value is None:
+            logger.warning(f"No {label} in the Job Order: the L1D name keeps the L1C's")
+    try:    # checked now, not after minutes of processing
+        planned = derive_output_product_id(input_zip_path.stem, environment=environment, baseline=baseline)
+    except ProductNamingError as e:
+        logger.error(f"L1D name: {e}")
+        logger.info(f"[Stop] exit_code={EXIT_FAILURE}")
+        sys.exit(EXIT_FAILURE)
+    logger.info(f"L1D name (generation time set at the end): {planned}")
+
     try:
         device = select_device(logger)
-        output_path = process_product(input_zip_path, clut_path, device, logger, timer)
+        output_path = process_product(input_zip_path, clut_path, device, logger, timer,
+                                      environment=environment, baseline=baseline)
         # the name relative to the working directory, as PDGS reads it (ICD 3.1.4.5)
         logger.info(f"OUTPUT_READY: {os.path.relpath(Path(output_path).resolve(), job_order['working_dir'])}")
         logger.info(f"[Stop] exit_code={EXIT_OK}")
