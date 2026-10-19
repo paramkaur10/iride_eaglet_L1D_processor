@@ -74,14 +74,15 @@ time set to the time of the run, and the environment and processing baseline
 (the last two parts, e.g. `O_A00`) taken from the Job Order (`Environment`,
 `Processing_Baseline_1DSP__RGB3`). If the Job Order leaves one out or empty,
 the L1C's is kept, with a warning; a value of the wrong form (not one capital
-letter, not three capital letters or digits) stops the run with exit code 255. Every file in the product is renamed to it,
-except files named after another product (`AUX_DATA/*.anc.xml`).
+letter, not three capital letters or digits) stops the run with exit code 255.
+Every file in the product is renamed to it, except files named after another
+product (`AUX_DATA/*.anc.xml`).
 
 | In the L1D product | Content |
 |---|---|
 | `IMG_DATA/<NEW_ID>.tif` | **the L1D image**: colour-corrected RGB (true colour), Cloud Optimized GeoTIFF, LZW with predictor (lossless), 512 x 512 tiles, internal overviews; uint16 = reflectance x 10000 + 1000 (Sentinel-2 L1C convention), 0 = no data. It replaces the L1C image |
-| `AUX_DATA/<NEW_ID>.CLM.tif` | cloud mask, uint8: 0 no data, 1 clear, 2 thick cloud, 3 thin cloud, 4 cloud shadow |
-| `AUX_DATA/<NEW_ID>.COM.tif` | cloud confidence, uint16, confidence x 10000 |
+| `AUX_DATA/<NEW_ID>.CLM.tif` | cloud mask, uint8: 0 no data, 1 clear, 2 thick cloud, 3 thin cloud, 4 cloud shadow. A pixel is cloud when its cloud confidence (the COM) is at least 0.5, thick or thin by whichever of the two is more likely; any other pixel is cloud shadow when OmniCloudMask finds shadow more likely than clear, clear otherwise. So the cloud in the CLM is exactly COM >= 5000 |
+| `AUX_DATA/<NEW_ID>.COM.tif` | cloud confidence: OmniCloudMask's probability of thick plus thin cloud, uint16, x 10000 |
 | `AUX_DATA/<NEW_ID>.CLM.json` | class legend |
 | `<NEW_ID>.json` | STAC: L1D identity (`collection` `IME-1DSP-RGB3`, description and collection link "Level 1D" / "L1D", `processing:level` `L1D`, `processing:lineage` = the input L1C product ID, `processing:software` `{"Eaglet-2 Level 1D processor": "01.00"}`); `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (title "Eaglet-2 Level 1D", band descriptions "Level-1D ...", COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (2nd / 98th percentile per band); `quicklook` points to the PNG and `thumbnail` to the JPEG (the reverse of the L1C); new id and times; `file:checksum` / `file:size` of every asset recomputed |
 | `<NEW_ID>.xml` | the L1C XML as in Enrico's L1D template (12 Oct 2026): `PRODUCT_ID` = `<NEW_ID>`, `PROCESSING_LEVEL` `L1D`, `GENERATION_TIME` = the generation time of the run (as in the product name and the STAC), `AUXILIARY_FILE` = only the colour AUX file used (name without `.xml`), `INPUT_PRODUCTS` = the input L1C zip, `Processor_Version` `01.00`; `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image. Everything else as in the L1C, as the template asks: element names (Level-1C), outliers, RPC |
@@ -121,8 +122,20 @@ given in the Job Order). The tables and the model are protected by SHA-256
 checksums, `<Method>` is not. A file without `<Method>` (version 3) works as
 `LUT`.
 
-The AUX file is prepared offline from the LUT (version 3 file written by the
-LUT notebook) and Enrico's script; that tool is not part of this repository.
+The built-in AUX file holds the LUT fitted on the A01 products with OHB's
+corrected coefficients: seven products of 17 and 18 Oct 2026, from IME01,
+IME02, IME03, IME04 and IME08, fitted on 19 Oct 2026. OHB changed the
+radiometry with A01, and the LUT fitted on A00 products no longer fits it; the
+first A01 products (13 to 15 Oct) had calibration problems and were not used.
+One colour balance fits every satellite measured (IME01 to IME04): a balance
+per satellite does no better. The LUT is fitted offline with
+`tools/build_lut.py`, a local tool that is not part of this repository:
+Sentinel-2 L1C within 3 days of each product (6 when that leaves less than
+half of it clear), EAGLET fitted onto it, the near-infrared share of each band
+and the colour balance of the delivered calibration measured on the pixel
+pairs, and the table trained on Sentinel-2 alone (world chips and the product
+footprints). It writes the new AUX file from the current one, keeping Enrico's
+model and `<Method>`.
 
 ## Installation and offline deployment
 
@@ -243,6 +256,9 @@ Cloud masking by [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask)
 
 ## Development notes
 
+Parampuneet Kaur Thind develops the processor: what was
+decided with Enrico and, for PDGS, with Claudio, and what is still open.
+
 Decided:
 
 - With Enrico (13 Oct 2026): the AUX files of the L1C stay as they are in
@@ -250,11 +266,25 @@ Decided:
   the `Rescaling_Factors` of the L1D image.
 - With Enrico (14 Oct 2026): the L1D name takes the environment and
   processing baseline from the Job Order.
-- The processor runs on new L1C products only (from 24 Sep 2026, with correct
-  `Rescaling_Factors`). PDGS sends a new colour AUX file through the Job Order
-  once in a while.
+- The processor runs on L1C products of processing baseline A01, the new
+  radiometry from OHB (October 2026). Its built-in LUT is fitted on the A01
+  products with OHB's corrected coefficients (19 Oct 2026); the first A01
+  products (13 to 15 Oct) had calibration problems, so no LUT was installed
+  from them. PDGS sends a new colour AUX file through the Job Order once in a
+  while.
 - The Docker build follows the PDGS build of the previous version (Claudio,
   13 Oct 2026); see Docker image.
+- With Enrico (15 Oct 2026): the colour AUX file stays out of the L1D's
+  `AUX_DATA`; the L1D names it in the XML's `AUXILIARY_FILE` and in the STAC.
+- `Number_of_CPUs` is 2, about 4 to 5 minutes per product (confirmed
+  15 Oct 2026).
+- The documents of ICD Appendix D (processor ICD, release note, user manual)
+  are not needed for now.
+- Cloud mask (19 Oct 2026, after Enrico's check of 16 Oct on a PDGS L1D): a
+  pixel is cloud when its cloud confidence (COM, thick plus thin cloud) is at
+  least 0.5. Before, each pixel took the most likely of OmniCloudMask's four
+  classes, which left clear the clouds whose probability was split between
+  thick and thin (clear 0.4, thick 0.3, thin 0.3 is 0.6 cloud).
 
 Open items:
 
@@ -267,10 +297,3 @@ Open items:
   script, which PDGS integration fills in (ICD Appendices E and F). The Task
   Table has `/opt/iride/iride-pdgs-ipf-prom-ttsc/ime/scripts/eaglet2-l1d-processor`
   as a proposal.
-- `Number_of_CPUs` 2 (about 4 minutes per product): to confirm with PDGS.
-- Colour AUX file in each product's `AUX_DATA`: Enrico said it depends on its
-  size; it is 186 KB.
-- Test data: the IME07 scene is cloud-free; a cloudy scene would test the
-  cloud mask too.
-- The documents of ICD Appendix D (processor ICD, release note, user manual):
-  needed for the test with PDGS, or later.

@@ -3,16 +3,34 @@
 import numpy as np
 import rasterio
 
+# A pixel is cloud when OmniCloudMask's probability of thick plus thin cloud (the cloud confidence,
+# written as the COM layer) reaches this value, so the CLM is exactly COM >= 0.5 x 10000.
+CLOUD_THRESHOLD = 0.5
 
-def probs_to_four_class_map(probs):
+
+def probs_to_four_class_map(probs, cloud_threshold=CLOUD_THRESHOLD):
     """
     OmniCloudMask's own native output classes (unshifted, model-internal):
       0 = clear
       1 = thick cloud
       2 = thin cloud
       3 = cloud shadow
+
+    probs: (4, H, W) class probabilities, in the order above.
+    Cloud where thick + thin cloud probability >= cloud_threshold: thick or thin, whichever of the two
+    is more likely (thick on a tie). Every other pixel is cloud shadow when shadow is more likely than
+    clear, clear otherwise.
+
+    The most likely of the four classes (argmax) is not used: it leaves clear a cloud whose probability
+    is split between thick and thin (clear 0.4, thick 0.3, thin 0.3 is 0.6 cloud), while it can call
+    cloud a pixel at 0.4.
     """
-    return np.argmax(probs, axis=0).astype("uint8")
+    out = np.zeros(probs.shape[1:], dtype="uint8")
+    out[probs[3] > probs[0]] = 3
+    cloud = (probs[1] + probs[2]) >= cloud_threshold
+    out[cloud] = 2
+    out[cloud & (probs[1] >= probs[2])] = 1
+    return out
 
 
 def probs_to_cloud_confidence(probs):
