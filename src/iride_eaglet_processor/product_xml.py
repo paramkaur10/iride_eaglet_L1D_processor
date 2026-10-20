@@ -8,7 +8,7 @@ L1C_Product_Image_Characteristics, ...). The template marks what the L1D process
     PROCESSING_LEVEL     L1D
     GENERATION_TIME      the L1D generation time, the same as in the product name and the STAC
                          (Enrico, 13 Oct 2026)
-    AUXILIARY_FILE       only the colour AUX file used (its name without .xml), in place of the L1C list
+    AUXILIARY_FILE       only the colour AUX file used (its name without .xml or .zip), in place of the L1C list
     INPUT_PRODUCTS       one PRODUCT, elem="1": the input L1C product zip
     Processor_Version    this processor's version
 Rescaling_Factors and the image checksum are set by calibration.set_l1d_image_in_xml. Everything else
@@ -23,6 +23,8 @@ import re
 import xml.etree.ElementTree as ET
 from datetime import timedelta
 from pathlib import Path
+
+from iride_eaglet_processor.colour_correction import aux_id
 
 AUX_FILE = re.compile(r"(?P<lead>\r?\n[ \t]*)?<AUXILIARY_FILE>[^<]*</AUXILIARY_FILE>")
 INPUT_PRODUCT = re.compile(r"(?P<lead>\r?\n[ \t]*)?<PRODUCT\b[^>]*>[^<]*</PRODUCT>")
@@ -68,14 +70,14 @@ def set_l1d_header_in_xml(xml_path, input_product_id, new_product_id, generation
     Writes the L1D header into the product XML (still named after the L1C at this point), as in Enrico's
     template. input_product_id must be the PRODUCT_ID of the XML (the L1C), whose PROCESSING_LEVEL must
     be L1C. generation_time (UTC) is the one in the new product name; it is written as in the STAC
-    (created / updated), e.g. 2026-10-13T09:12:45.123456Z. aux_path is the colour AUX file used; it is
-    listed by its name without the .xml extension, as the L1C lists its AUX files.
+    (created / updated), e.g. 2026-10-13T09:12:45.123456Z. aux_path is the colour AUX file used (the XML, or
+    the zip PDGS gives it in); it is listed by its name without .xml or .zip, as the L1C lists its AUX files.
     """
     if generation_time.utcoffset() != timedelta(0):
         raise ValueError(f"generation time must be in UTC, got {generation_time!r}")
     gen_time = generation_time.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     xml_path, aux_path = Path(xml_path), Path(aux_path)
-    aux_name = aux_path.stem if aux_path.suffix.lower() == ".xml" else aux_path.name
+    aux_name = aux_id(aux_path)
     text = xml_path.read_bytes().decode("utf-8")
 
     text = _set_value(text, "PRODUCT_ID", new_product_id, expected=input_product_id)

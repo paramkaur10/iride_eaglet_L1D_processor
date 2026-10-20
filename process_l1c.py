@@ -68,8 +68,11 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
     (IME___AXE1D_CLUT_....xml: the LUT, Enrico's class model, and <Method>,
     which selects LUT, CLASS_MODEL or HYBRID). The processor carries its own
     in aux/ and uses it by default (the newest, by the creation time in the
-    name); an AXE1D_CLUT file given in the Job Order overrides it. Without a
-    usable AUX file there is no L1D image: exit code 255.
+    name); an AXE1D_CLUT file given in the Job Order overrides it. PDGS gives
+    AUX files zipped: <ID>.zip holding <ID>/<ID>.xml and its <ID>/<ID>.hdr.
+    The processor reads the XML in the zip (an unzipped folder or the bare
+    XML work too), and reads and checks the file before anything else: without
+    a usable AUX file there is no L1D image, exit code 255 within seconds.
   * Calibration (DN * gain + offset) comes from the product XML's
     Rescaling_Factors, for the cloud mask and the colour step alike.
   * Logs the time spent in each step at the end ("Processing times").
@@ -184,7 +187,7 @@ from iride_eaglet_processor.calibration import find_product_xml, set_l1d_image_i
 from iride_eaglet_processor.product_xml import set_l1d_header_in_xml
 from iride_eaglet_processor.previews import make_l1d_previews, point_kml_at_renamed_files
 from iride_eaglet_processor.colour_correction import (
-    ColourCorrection, write_colour_product, L1D_GAIN, L1D_OFFSET,
+    ColourCorrection, ColourCorrectionError, write_colour_product, L1D_GAIN, L1D_OFFSET,
 )
 
 
@@ -197,7 +200,7 @@ from iride_eaglet_processor.colour_correction import (
 # the STAC of the product (processing:software) and is the tag of the
 # Docker image.
 PROCESSOR_NAME = "EAGLET2_L1D_PROC"
-PROCESSOR_VERSION = "01.00"
+PROCESSOR_VERSION = "01.01"
 TASK_NAME = "EAGLET2_L1D"
 TASK_VERSION = "01.00"
 
@@ -293,16 +296,14 @@ class StepTimer:
         return " | ".join(parts + [f"total {time.perf_counter() - self.start:.1f}"])
 
 
-def make_l1d_image(product, clut_path, logger):
+def make_l1d_image(product, cc, logger):
     """
     Colour-corrects the product at full resolution with the method the AUX
-    file selects, and puts the result in IMG_DATA in place of the L1C image,
-    under the same file name: COG, LZW (lossless), uint16 = reflectance x
-    10000 + 1000, 0 = no data. Returns the facts for the logs, the XML and
-    the STAC entry.
+    file selects (cc, the ColourCorrection read from it), and puts the result
+    in IMG_DATA in place of the L1C image, under the same file name: COG, LZW
+    (lossless), uint16 = reflectance x 10000 + 1000, 0 = no data. Returns the
+    facts for the logs, the XML and the STAC entry.
     """
-    cc = ColourCorrection(clut_path)
-    logger.info(f"Colour correction: {cc.describe()}")
     gains = [product["calibration"][b][0] for b in (1, 2, 3)]
     offsets = [product["calibration"][b][1] for b in (1, 2, 3)]
     tif_path = product["tif_path"]
@@ -320,7 +321,7 @@ def make_l1d_image(product, clut_path, logger):
     return info
 
 
-def process_product(input_zip_path, clut_path, device, logger, timer, environment=None, baseline=None):
+def process_product(input_zip_path, cc, device, logger, timer, environment=None, baseline=None):
     """
     input_zip_path: absolute Path to the L1C RGB3 product zip, as supplied
     by the Job Order. Extracted and enriched under its original (L1C)
@@ -328,7 +329,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer, environmen
     (per Enrico/Paola's confirmed naming convention) and packaged as a
     NEW output zip in the same working directory. The original input zip
     is never modified or deleted.
-    clut_path: the colour-correction AUX file (the Job Order's, or the processor's own).
+    cc: the colour correction (ColourCorrection), read from the AUX file of the Job Order or the processor's own.
     environment, baseline: for the L1D name, from the Job Order (None keeps the L1C's).
     Returns the output zip path.
     """
@@ -411,7 +412,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer, environmen
     # them first. The colour step reads the image again tile by tile.
     del image, image_chw, img_inf, probs_inf, probs_full, four_class, conf, four_class_out, valid_full
     product.pop("image", None)
-    l1d = make_l1d_image(product, clut_path, logger)
+    l1d = make_l1d_image(product, cc, logger)
     timer.mark("colour correction", last_part=("COG writing", l1d["seconds_cog"]))
 
     # --- quicklooks drawn from the L1D image ---------------------------------------
@@ -431,7 +432,7 @@ def process_product(input_zip_path, clut_path, device, logger, timer, environmen
     else:
         set_l1d_image_in_xml(xml_path, product["tif_path"], L1D_GAIN, L1D_OFFSET, logger)
         set_l1d_header_in_xml(xml_path, old_scene_id, new_scene_id, generation_time, input_zip_path.name,
-                              clut_path, PROCESSOR_VERSION, logger)
+                              cc.path, PROCESSOR_VERSION, logger)
 
     enrich_sidecar_json(
         json_path, old_product_root, cloud_cover_pct, clm_path, com_path, legend_path,
@@ -550,6 +551,13 @@ def main():
             sys.exit(EXIT_FAILURE)
         clut_path = own[-1]
         logger.info(f"Colour AUX file: none in the Job Order, using the processor's own: {clut_path.name}")
+    try:    # read and checked now, not after the cloud mask (first PDGS run with an AUX file, 20 Oct 2026)
+        cc = ColourCorrection(clut_path)
+    except ColourCorrectionError as e:
+        logger.error(f"No L1D image without a usable colour AUX file: {e}")
+        logger.info(f"[Stop] exit_code={EXIT_FAILURE}")
+        sys.exit(EXIT_FAILURE)
+    logger.info(f"Colour correction: {cc.describe()}, read from {cc.source}")
 
     # Environment and processing baseline of the L1D name: from the Job Order (Enrico,
     # 14 Oct 2026); if PDGS leaves one out or empty, the L1C's is kept, with a warning
@@ -569,7 +577,7 @@ def main():
 
     try:
         device = select_device(logger)
-        output_path = process_product(input_zip_path, clut_path, device, logger, timer,
+        output_path = process_product(input_zip_path, cc, device, logger, timer,
                                       environment=environment, baseline=baseline)
         # the name relative to the working directory, as PDGS reads it (ICD 3.1.4.5)
         logger.info(f"OUTPUT_READY: {os.path.relpath(Path(output_path).resolve(), job_order['working_dir'])}")

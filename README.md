@@ -7,7 +7,7 @@ IRIDE Processor ICD (PDGS-ID-XPR-IRIDE-0209 v2.4). The input product is never
 modified. Python 3.10 or newer. Runs on CPU only: no GPU is used, even on a
 machine that has one.
 
-Processor `EAGLET2_L1D_PROC`, task `EAGLET2_L1D`, version `01.00` (this
+Processor `EAGLET2_L1D_PROC`, task `EAGLET2_L1D`, version `01.01` (this
 repository is `iride_eaglet_processor_v2`). The same version is written in
 the STAC of every product it makes (`processing:software`).
 
@@ -19,7 +19,11 @@ python process_l1c.py <absolute path to JobOrder.xml>
 
 The Job Order gives the product zip (`1CSP__RGB3`) and the logging level. The
 colour correction uses the processor's own AUX file in `aux/`, unless the Job
-Order also lists one (`AXE1D_CLUT`), which then overrides it. The new product
+Order also lists one (`AXE1D_CLUT`), which then overrides it. PDGS gives AUX
+files zipped (`<ID>.zip` holding `<ID>/<ID>.xml` and its `<ID>/<ID>.hdr`): the
+processor reads the XML in the zip, without unzipping it; an unzipped folder
+or the bare XML work too. The AUX file is read and checked before anything
+else, so an unusable one stops the run within seconds. The new product
 is written as `<NEW_ID>.zip` next to the input zip, and the log then says
 `OUTPUT_READY: <NEW_ID>.zip` (the name relative to the working directory, as
 PDGS reads it). No network is used at runtime (model weights from
@@ -47,8 +51,10 @@ flowchart TD
         READ --> HAS{"Colour AUX file<br/>in the Job Order?"}
         HAS -->|yes| AUXJ["use it"]
         HAS -->|no| AUXO["use the processor's<br/>own, in aux/"]
-        AUXJ --> UNZIP
-        AUXO --> UNZIP
+        AUXJ --> CHECK
+        AUXO --> CHECK
+        CHECK["read and check the<br/>AUX file (XML, or the<br/>zip PDGS gives it in)"]
+        CHECK --> UNZIP
         UNZIP["<b>unzip</b><br/>the L1C product"]
         UNZIP --> CAL["<b>read + calibrate</b><br/>DN to reflectance, with<br/>GAIN / OFFSET of the XML"]
         CAL --> CLOUD["<b>cloud mask</b><br/>OmniCloudMask at 5 m,<br/>on CPU: CLM and COM"]
@@ -84,8 +90,8 @@ product (`AUX_DATA/*.anc.xml`).
 | `AUX_DATA/<NEW_ID>.CLM.tif` | cloud mask, uint8: 0 no data, 1 clear, 2 thick cloud, 3 thin cloud, 4 cloud shadow. A pixel is cloud when its cloud confidence (the COM) is at least 0.5, thick or thin by whichever of the two is more likely; any other pixel is cloud shadow when OmniCloudMask finds shadow more likely than clear, clear otherwise. So the cloud in the CLM is exactly COM >= 5000 |
 | `AUX_DATA/<NEW_ID>.COM.tif` | cloud confidence: OmniCloudMask's probability of thick plus thin cloud, uint16, x 10000 |
 | `AUX_DATA/<NEW_ID>.CLM.json` | class legend |
-| `<NEW_ID>.json` | STAC: L1D identity (`collection` `IME-1DSP-RGB3`, description and collection link "Level 1D" / "L1D", `processing:level` `L1D`, `processing:lineage` = the input L1C product ID, `processing:software` `{"Eaglet-2 Level 1D processor": "01.00"}`); `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (title "Eaglet-2 Level 1D", band descriptions "Level-1D ...", COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (2nd / 98th percentile per band); `quicklook` points to the PNG and `thumbnail` to the JPEG (the reverse of the L1C); new id and times; `file:checksum` / `file:size` of every asset recomputed |
-| `<NEW_ID>.xml` | the L1C XML as in Enrico's L1D template (12 Oct 2026): `PRODUCT_ID` = `<NEW_ID>`, `PROCESSING_LEVEL` `L1D`, `GENERATION_TIME` = the generation time of the run (as in the product name and the STAC), `AUXILIARY_FILE` = only the colour AUX file used (name without `.xml`), `INPUT_PRODUCTS` = the input L1C zip, `Processor_Version` `01.00`; `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image. Everything else as in the L1C, as the template asks: element names (Level-1C), outliers, RPC |
+| `<NEW_ID>.json` | STAC: L1D identity (`collection` `IME-1DSP-RGB3`, description and collection link "Level 1D" / "L1D", `processing:level` `L1D`, `processing:lineage` = the input L1C product ID, `processing:software` `{"Eaglet-2 Level 1D processor": "01.01"}`); `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (title "Eaglet-2 Level 1D", band descriptions "Level-1D ...", COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (2nd / 98th percentile per band); `quicklook` points to the PNG and `thumbnail` to the JPEG (the reverse of the L1C); new id and times; `file:checksum` / `file:size` of every asset recomputed |
+| `<NEW_ID>.xml` | the L1C XML as in Enrico's L1D template (12 Oct 2026): `PRODUCT_ID` = `<NEW_ID>`, `PROCESSING_LEVEL` `L1D`, `GENERATION_TIME` = the generation time of the run (as in the product name and the STAC), `AUXILIARY_FILE` = only the colour AUX file used (name without `.xml` or `.zip`), `INPUT_PRODUCTS` = the input L1C zip, `Processor_Version` `01.01`; `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image. Everything else as in the L1C, as the template asks: element names (Level-1C), outliers, RPC |
 | `PREVIEW/*` | PNG and JPEG drawn from the L1D image, with the same names, formats and sizes as in the L1C product (one linear stretch for the three bands, 1st to 99th percentile). The PNG is RGBA, transparent where there is no data; the JPEG has no transparency, so no data is black there. The KML places the PNG on the map (the L1C one places the JPEG) |
 
 Files that are already compressed (`.tif`, `.png`, `.jpg`) are stored in the
@@ -108,7 +114,11 @@ applies. The LUT is the same for every product, so the processor carries the
 file in `aux/` and uses it by default (the newest there, by the creation time
 in the name). To change the LUT or the method in operations, PDGS can give a
 newer file in the Job Order as an `AXE1D_CLUT` input: it overrides the
-processor's own. The file used is named in the log, in the image's tags and in
+processor's own, with no new Docker image, as long as the file keeps the same
+layout (the same tables and axes). PDGS hands it over as it archives AUX files,
+`<ID>.zip` holding `<ID>/<ID>.xml` and its header `<ID>/<ID>.hdr`; the
+processor reads the XML in the zip. The file used is named, without `.xml` or
+`.zip`, in the log, in the image's tags, in the XML's `AUXILIARY_FILE` and in
 the STAC description.
 
 | `<Method>` | What it does | Brightness |
@@ -175,7 +185,7 @@ its own wrapper script, as:
 
 ```bash
 docker run --user 1100:600 --cpus 2 -v <WD>:<WD>:rw -w <WD> ... \
-    ipf-ime-msi-l1d:01.00 EAGLET2_L1D <WD>/JobOrder.<id>.xml
+    ipf-ime-msi-l1d:01.01 EAGLET2_L1D <WD>/JobOrder.<id>.xml
 ```
 
 `EAGLET2_L1D`, the entry point, is a link to `process_l1c.py`, which runs in
@@ -187,9 +197,9 @@ Build, test and save for delivery, on a machine with Docker and internet,
 after `python download_models.py`:
 
 ```bash
-docker/build_image.sh                                 # image ipf-ime-msi-l1d:01.00
+docker/build_image.sh                                 # image ipf-ime-msi-l1d:01.01
 docker/test_image.sh <L1C zip> [<reference L1D zip>]  # runs it as PDGS does and checks the result
-docker/build_image.sh --save                          # dist/IPF-IME-MSI-L1D-01.00.tar.gz and its SHA-256
+docker/build_image.sh --save                          # dist/IPF-IME-MSI-L1D-01.01.tar.gz and its SHA-256
 ```
 
 `docker/build_image.sh` makes the build context in `dist/build/` (the zip is
@@ -199,8 +209,12 @@ models run. The image tag is the processor version in `task_table.xml`.
 `docker/test_image.sh` runs the image as user 1100:600 with only the working
 directory mounted and the Task Table's CPUs, and also with no network and a
 read-only file system, so any download, or any file written outside the
-working directory, makes it fail. It then checks the exit code, the log, the
-output's name, owner and content and, given an L1D zip made from the same
+working directory, makes it fail. Its Job Order gives the colour AUX file as
+PDGS does, zipped with a `.hdr` (the newest in `aux/`; `AUX=<.xml or .zip>`
+gives another, `AUX=none` none, so the processor uses its own), and the input
+product's processing baseline for the L1D name (`BASELINE` sets another). It
+then checks the exit code, the log, the AUX file used, the output's name, owner
+and content and, given an L1D zip made from the same
 product with the same colour method, that the L1D image has the same pixels
 (compared in the image). Its working directory is under
 `/var/tmp/eaglet2_l1d_test` (`TEST_ROOT` changes it; not under `/root`, which
@@ -280,6 +294,13 @@ Decided:
   15 Oct 2026).
 - The documents of ICD Appendix D (processor ICD, release note, user manual)
   are not needed for now.
+- With Enrico (20 Oct 2026): version 01.01, so that a new LUT can go to PDGS
+  as an AUX file alone. PDGS gives AUX files zipped (`<ID>.zip` holding
+  `<ID>/<ID>.xml` and its `.hdr`), and 01.00 could read only the bare XML: its
+  first PDGS run with an AUX file in the Job Order (20 Oct) stopped with exit
+  code 255, after the cloud mask. 01.01 reads the XML in the zip, and checks
+  the AUX file before anything else. The task version stays 01.00, so PDGS's
+  Job Orders do not change.
 - Cloud mask (19 Oct 2026, after Enrico's check of 16 Oct on a PDGS L1D): a
   pixel is cloud when its cloud confidence (COM, thick plus thin cloud) is at
   least 0.5. Before, each pixel took the most likely of OmniCloudMask's four

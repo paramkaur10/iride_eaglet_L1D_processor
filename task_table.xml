@@ -17,7 +17,7 @@
        12 Oct 2026). The Version is also written in the STAC of the product
        (processing:software) and is the tag of the Docker image. -->
   <Processor_Name>EAGLET2_L1D_PROC</Processor_Name>
-  <Version>01.00</Version>
+  <Version>01.01</Version>
   <!-- Largest L1C RGB3 product observed so far is ~1.3GB. The product is
        held unzipped, renamed and re-zipped; the L1D image is first written
        as a plain GeoTIFF (uint16, 3 bands), then as the COG that replaces
@@ -105,7 +105,9 @@
                  <validity stop>_<creation>____________O_001.xml): the LUT,
                  Enrico's class model and the <Method> that selects one.
                  Optional: the processor carries its own in aux/ and uses it
-                 by default; a file given here overrides it.
+                 by default; a file given here overrides it. PDGS gives it
+                 zipped (<ID>.zip holding <ID>/<ID>.xml and <ID>/<ID>.hdr),
+                 and the processor reads it as it is (from version 01.01).
                  TODO: confirm with PDGS integration the File_Type code,
                  Origin and Retrieval_Mode for auxiliary files -->
             <Input>

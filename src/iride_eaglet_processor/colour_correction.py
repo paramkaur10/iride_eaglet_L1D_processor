@@ -23,6 +23,12 @@ Two methods, plus their mix, all configured by one auxiliary file
 The AUX file's <Method> element picks one. A version 3 file (no <Method>, no
 <Class_Model>) works as LUT only.
 
+The AUX file can be given as the XML itself (the processor's own, in aux/), or
+as PDGS hands AUX files over: a zip, <ID>.zip, holding <ID>/<ID>.xml and the
+PDGS header <ID>/<ID>.hdr, which the processor reads without unzipping it; a
+folder holding the XML (such a zip unzipped) works too. The L1D names the file
+by <ID>, its name without .xml or .zip.
+
 Input for every method: top-of-atmosphere reflectance rho = DN * GAIN + OFFSET,
 GAIN and OFFSET from the product XML's Rescaling_Factors. DN = 0 in any band is
 no data. Output: the L1D image, a Cloud Optimized GeoTIFF (LZW, lossless) with
@@ -35,6 +41,7 @@ import hashlib
 import json
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -57,18 +64,71 @@ class ColourCorrectionError(Exception):
     pass
 
 
+def aux_id(aux_path):
+    """the name the colour AUX file goes by, as the L1C lists its AUX files: the file or folder name without
+    .xml or .zip, e.g. IME___AXE1D_CLUT_20240101T000000_20990101T000000_20261019T112255____________O_001"""
+    name = Path(aux_path).name
+    return name[:-4] if name.lower().endswith((".xml", ".zip")) else name
+
+
+def read_aux_xml(aux_path):
+    """
+    The XML of the colour AUX file at aux_path, which is one of:
+      - the XML itself (the processor's own, in aux/);
+      - a zip, as PDGS hands AUX files over (first PDGS run with an AUX file, 20 Oct 2026): <ID>.zip holding
+        <ID>/<ID>.xml and the PDGS header <ID>/<ID>.hdr; read as it is, nothing is unzipped;
+      - a folder holding the XML (such a zip, unzipped).
+    In a zip or a folder the XML is its one .xml file or, when there are several, the one named <ID>.xml (<ID>:
+    the name of the zip or folder). The .hdr and any other file are left alone.
+    Returns (the XML as bytes, the .xml file in the zip or folder, or None for the XML itself).
+    """
+    path = Path(aux_path)
+    try:
+        if path.is_dir():
+            files = {p.relative_to(path).as_posix(): p for p in sorted(path.rglob("*")) if p.is_file()}
+            member = _aux_member(list(files), path)
+            return files[member].read_bytes(), member
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as zf:
+                member = _aux_member([i.filename for i in zf.infolist() if not i.is_dir()], path)
+                return zf.read(member), member
+        return path.read_bytes(), None
+    except ColourCorrectionError:
+        raise
+    except Exception as e:          # missing, unreadable, a damaged zip: no L1D image without the AUX file
+        raise ColourCorrectionError(f"Cannot read colour AUX file {path}: {e}") from e
+
+
+def _aux_member(names, package):
+    """the AUX XML among the files of a zip or folder (see read_aux_xml)"""
+    xmls = [n for n in names if n.lower().endswith(".xml") and not n.startswith("__MACOSX/")
+            and not n.rsplit("/", 1)[-1].startswith("._")]
+    if len(xmls) > 1:
+        named = [n for n in xmls if n.rsplit("/", 1)[-1][:-4] == aux_id(package)]
+        xmls = named if len(named) == 1 else xmls
+    if len(xmls) != 1:
+        listed = ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
+        raise ColourCorrectionError(f"{package}: expected one .xml file in it, found {len(xmls)} "
+                                    f"(it holds: {listed or 'nothing'})")
+    return xmls[0]
+
+
 class ColourCorrection:
     """
-    Reads the colour-correction AUX file and applies the selected method to
-    reflectance triplets. method=None uses the file's own <Method>.
+    Reads the colour-correction AUX file (the XML, or the zip or folder holding it: see read_aux_xml) and applies
+    the selected method to reflectance triplets. method=None uses the file's own <Method>.
     """
 
     def __init__(self, aux_path, method=None):
         self.path = Path(aux_path)
+        self.name = aux_id(self.path)
+        data, member = read_aux_xml(self.path)
+        self.source = self.path.name if member is None else f"{self.path.name} ({member})"
         try:
-            root = ET.parse(self.path).getroot()
-        except (OSError, ET.ParseError) as e:
-            raise ColourCorrectionError(f"Cannot read colour AUX file {self.path}: {e}") from e
+            root = ET.fromstring(data)
+        except ET.ParseError as e:
+            raise ColourCorrectionError(f"Cannot read colour AUX file {self.path}"
+                                        f"{'' if member is None else f' ({member})'}: {e}") from e
         cc = root.find("Data_Block/Colour_Correction")
         if cc is None:
             raise ColourCorrectionError(f"{self.path.name}: no Data_Block/Colour_Correction")
@@ -184,7 +244,7 @@ class ColourCorrection:
         return alpha * his_at_ours + (1 - alpha) * ours
 
     def describe(self):
-        return f"method {self.method}, AUX {self.path.name} (version {self.version})"
+        return f"method {self.method}, AUX {self.name} (version {self.version})"
 
 
 def _prepare_model(M):
@@ -307,7 +367,7 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
             n_tiles = -(-H // tile) * -(-W // tile)
             done, n_valid = 0, 0
             with rasterio.open(tiles_path, "w", **profile) as dst:
-                dst.update_tags(COLOUR_METHOD=cc.method, COLOUR_AUX_FILE=cc.path.name,
+                dst.update_tags(COLOUR_METHOD=cc.method, COLOUR_AUX_FILE=cc.name,
                                 ENCODING="uint16 = reflectance * 10000 + 1000, 0 = no data",
                                 CALIBRATION="reflectance = DN * GAIN + OFFSET, product XML Rescaling_Factors",
                                 BRIGHTNESS="as delivered" if cc.method != "CLASS_MODEL"
@@ -343,6 +403,6 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
         for p in (tiles_path, part_path):
             if p.exists():
                 p.unlink()
-    return dict(method=cc.method, aux_file=cc.path.name, aux_version=cc.version, valid_pixels=n_valid,
+    return dict(method=cc.method, aux_file=cc.name, aux_version=cc.version, valid_pixels=n_valid,
                 width=W, height=H, rescale=percentiles_from_counts(counts),
                 seconds_correction=t_corrected - t_start, seconds_cog=t_done - t_corrected)

@@ -11,6 +11,11 @@
 # the Job Order as PDGS would, runs the image and checks the result. With a reference L1D zip, made
 # without Docker from the same product with the same colour method, the L1D image must have the same
 # pixels (compared in the image, with its Python and rasterio).
+# The Job Order also gives the colour AUX file (AXE1D_CLUT) as PDGS hands AUX files over: <ID>.zip holding
+# <ID>/<ID>.xml and a header <ID>/<ID>.hdr (PDGS run of 20 Oct 2026). By default it is the newest AUX file in
+# aux/; AUX=<.xml file> packs another one the same way, AUX=<.zip file> gives that zip as it is, and AUX=none
+# leaves the AUX file out of the Job Order, so the processor uses its own. The Job Order's processing baseline
+# for the L1D name is the input product's (BASELINE=<A01 or other> sets another).
 # Unattended: prints PASS or FAIL for each check and exits with 0 only when all of them pass.
 # DOCKER=podman runs it with Podman.
 set -uo pipefail
@@ -41,6 +46,23 @@ if ! "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 2
 fi
 
+# --- the colour AUX file for the Job Order ------------------------------------------------------
+OWN_AUX=$(ls "$REPO"/aux/IME___AXE1D_CLUT_*.xml 2>/dev/null | sort | tail -n 1)
+[ -n "$OWN_AUX" ] || { echo "No colour AUX file in $REPO/aux" >&2; exit 2; }
+AUX=${AUX:-$OWN_AUX}
+if [ "$AUX" = none ]; then
+    AUX_SRC=""
+    AUX_ID=$(basename "$OWN_AUX" .xml)             # the processor's own, the newest in aux/
+else
+    AUX_SRC=$(readlink -f "$AUX")
+    [ -f "$AUX_SRC" ] || { echo "No such file: $AUX" >&2; exit 2; }
+    case "$AUX_SRC" in
+        *.xml) AUX_ID=$(basename "$AUX_SRC" .xml) ;;
+        *.zip) AUX_ID=$(basename "$AUX_SRC" .zip) ;;
+        *) echo "AUX must be an .xml or .zip file, or none: $AUX" >&2; exit 2 ;;
+    esac
+fi
+
 # --- the working directory, as PDGS prepares it ------------------------------------------------
 NAME=$(basename "$L1C")
 TEST_ROOT=${TEST_ROOT:-/var/tmp/eaglet2_l1d_test}
@@ -54,6 +76,41 @@ START=""; STOP=""
 if [[ $NAME =~ _([0-9]{8})T([0-9]{6})_([0-9]{8})T([0-9]{6})_ ]]; then
     START="${BASH_REMATCH[1]}_${BASH_REMATCH[2]}000000"
     STOP="${BASH_REMATCH[3]}_${BASH_REMATCH[4]}000000"
+fi
+if [ -z "${BASELINE:-}" ] && [[ $NAME =~ _([A-Z0-9]{3})\.zip$ ]]; then
+    BASELINE=${BASH_REMATCH[1]}                    # the input product's processing baseline
+fi
+BASELINE=${BASELINE:-A00}
+
+# the colour AUX file, packed as PDGS packs it, unless it is a zip already
+AUX_FILE=""
+AUX_INPUT=""
+if [ -n "$AUX_SRC" ]; then
+    AUX_FILE="$AUX_ID.zip"
+    if [[ $AUX_SRC == *.zip ]]; then
+        cp "$AUX_SRC" "$WD/$AUX_FILE"
+    else
+        python3 - "$AUX_SRC" "$WD/$AUX_FILE" "$AUX_ID" <<'PYEOF' || { echo "Could not pack $AUX_SRC" >&2; exit 2; }
+import sys, zipfile
+src, out, aux_id = sys.argv[1:]
+header = (f'<?xml version="1.0" encoding="UTF-8"?>\n<Earth_Explorer_Header>\n  <Fixed_Header>\n'
+          f'    <File_Name>{aux_id}</File_Name>\n    <File_Type>AXE1D_CLUT</File_Type>\n  </Fixed_Header>\n'
+          f'</Earth_Explorer_Header>\n')
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    zf.writestr(zipfile.ZipInfo(f"{aux_id}/"), b"")                 # the folder, then the AUX file and its header
+    zf.write(src, f"{aux_id}/{aux_id}.xml")
+    zf.writestr(f"{aux_id}/{aux_id}.hdr", header)
+PYEOF
+    fi
+    AUX_INPUT="
+        <Input>
+          <File_Type>AXE1D_CLUT</File_Type>
+          <File_Name_Type>Physical</File_Name_Type>
+          <List_of_File_Names count=\"1\">
+            <File_Name>$WD/$AUX_FILE</File_Name>
+          </List_of_File_Names>
+          <List_of_Time_Intervals count=\"0\"/>
+        </Input>"
 fi
 
 cat > "$JOB_ORDER" <<EOF
@@ -72,7 +129,7 @@ cat > "$JOB_ORDER" <<EOF
       <Dyn_Processing_Parameter><Name>Class_ID</Name><Value>TEST</Value></Dyn_Processing_Parameter>
       <Dyn_Processing_Parameter><Name>Timeliness_Key</Name><Value></Value></Dyn_Processing_Parameter>
       <Dyn_Processing_Parameter><Name>Environment</Name><Value>O</Value></Dyn_Processing_Parameter>
-      <Dyn_Processing_Parameter><Name>Processing_Baseline_1DSP__RGB3</Name><Value>A00</Value></Dyn_Processing_Parameter>
+      <Dyn_Processing_Parameter><Name>Processing_Baseline_1DSP__RGB3</Name><Value>$BASELINE</Value></Dyn_Processing_Parameter>
       <Dyn_Processing_Parameter><Name>Acquisition_ID</Name><Value></Value></Dyn_Processing_Parameter>
       <Dyn_Processing_Parameter><Name>Acquisition_Type</Name><Value>NOM</Value></Dyn_Processing_Parameter>
     </List_of_Dyn_Processing_Parameters>
@@ -86,7 +143,7 @@ cat > "$JOB_ORDER" <<EOF
         <List_of_Brk_Files count="0"/>
       </Breakpoint>
       <List_of_Config_Files count="0"/>
-      <List_of_Inputs count="1">
+      <List_of_Inputs count="$(( ${#AUX_FILE} > 0 ? 2 : 1 ))">
         <Input>
           <File_Type>1CSP__RGB3</File_Type>
           <File_Name_Type>Physical</File_Name_Type>
@@ -94,7 +151,7 @@ cat > "$JOB_ORDER" <<EOF
             <File_Name>$WD/$NAME</File_Name>
           </List_of_File_Names>
           <List_of_Time_Intervals count="0"/>
-        </Input>
+        </Input>$AUX_INPUT
       </List_of_Inputs>
       <List_of_Outputs count="1">
         <Output>
@@ -120,6 +177,7 @@ fi
 
 # --- the run: the docker run of the ICD (Appendix E, item 13), plus --network none --read-only ---
 echo "Image $IMAGE, task $TASK $TASK_VERSION, $CPUS CPUs"
+echo "Job Order: processing baseline $BASELINE, colour AUX file ${AUX_FILE:-none (the processor uses its own, $AUX_ID)}"
 echo "Working directory $WD"
 echo "Log $LOG"
 T0=$(date +%s)
@@ -156,6 +214,13 @@ check "exit code 0 (got $CODE)" [ "$CODE" -eq 0 ]
 check "log ends with [Stop] exit_code=0" grep -q "\[Stop\] exit_code=0" "$LOG"
 check "the processor uses $CPUS CPU threads (Number_of_CPUs)" \
     grep -q "Inference device: cpu (the processor runs on CPU only), $CPUS threads" "$LOG"
+if [ -n "$AUX_FILE" ]; then
+    check "colour AUX file from the Job Order, read from the zip: $AUX_FILE" \
+        grep -q "Colour correction: method .*, AUX $AUX_ID (version .*), read from $AUX_FILE (" "$LOG"
+else
+    check "colour AUX file of the processor: $AUX_ID.xml" \
+        grep -q "Colour correction: method .*, AUX $AUX_ID (version .*), read from $AUX_ID.xml\$" "$LOG"
+fi
 
 OUTPUTS=()
 LEFT=()
@@ -164,7 +229,7 @@ for path in "$WD"/* "$WD"/.[!.]*; do
     name=$(basename "$path")
     if [[ $name =~ $REG_EXP ]]; then
         OUTPUTS+=("$name")
-    elif [ "$name" != "$NAME" ] && [ "$name" != "$(basename "$JOB_ORDER")" ]; then
+    elif [ "$name" != "$NAME" ] && [ "$name" != "$(basename "$JOB_ORDER")" ] && [ "$name" != "$AUX_FILE" ]; then
         LEFT+=("$name")
     fi
 done
@@ -193,6 +258,9 @@ if [ -n "$OUT" ]; then
     check "XML GENERATION_TIME is the generation time in the name ($GEN)" grep -q "<GENERATION_TIME>$GEN" <<< "$XML"
     check "STAC id is the product name" grep -q "\"id\": *\"$ID\"" <<< "$STAC"
     check "STAC processing:level L1D" grep -q "\"processing:level\": *\"L1D\"" <<< "$STAC"
+    check "XML AUXILIARY_FILE is the colour AUX file, without .xml or .zip" \
+        grep -q "<AUXILIARY_FILE>$AUX_ID</AUXILIARY_FILE>" <<< "$XML"
+    check "STAC names the colour AUX file, without .xml or .zip" grep -q "colour AUX file $AUX_ID\. " <<< "$STAC"
 
     image_sha() {       # the SHA-256 of the L1D image in the zip $1
         local id
