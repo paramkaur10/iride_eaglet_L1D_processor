@@ -315,7 +315,7 @@ Cloud masking by [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask)
 ## Development notes
 
 Parampuneet Kaur Thind develops the processor: what was
-decided with Enrico and, for PDGS, with Claudio, and what is still open.
+decided with Enrico Cadau (ESA ESRIN) and, for PDGS, with Claudio Nasuti (Exprivia), and what is still open.
 
 Decided:
 
