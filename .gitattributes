@@ -1,0 +1,2 @@
+# pictures for the README: left out of git archive, so out of the Docker build context and of GitHub's Download ZIP
+docs/ export-ignore

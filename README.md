@@ -147,6 +147,49 @@ pairs, and the table trained on Sentinel-2 alone (world chips and the product
 footprints). It writes the new AUX file from the current one, keeping Enrico's
 model and `<Method>`.
 
+## Examples
+
+### The A01 LUT
+
+The built-in LUT against Sentinel-2 L1C, on the seven A01 products it was fitted on (mean of the seven):
+
+| | Colour error (CIELAB dE, lower is better) | Vegetation shown green |
+|---|---|---|
+| as delivered | 9.08 | 34% |
+| previous LUT (7 Oct, fitted on A00 products) | 20.1 | 72% |
+| **A01 LUT, one balance (built in)** | **7.42** | **86%** |
+| A01 LUT, a balance per satellite (not used) | 7.37 | 83% |
+
+Each product side by side: as delivered, previous LUT, A01 LUT, A01 LUT with a balance per satellite, Sentinel-2 L1C. Made with `tools/lut_previews.py` before the A01 LUT was installed, so "current LUT" in the titles is the previous one.
+
+![IME01_20261018T052237](docs/images/lut_a01_IME01_20261018T052237.jpg)
+
+![IME02_20261017T100237](docs/images/lut_a01_IME02_20261017T100237.jpg)
+
+![IME02_20261017T162233](docs/images/lut_a01_IME02_20261017T162233.jpg)
+
+![IME03_20261017T164428](docs/images/lut_a01_IME03_20261017T164428.jpg)
+
+![IME03_20261018T052230](docs/images/lut_a01_IME03_20261018T052230.jpg)
+
+![IME04_20261017T093952](docs/images/lut_a01_IME04_20261017T093952.jpg)
+
+![IME08_20261017T094335](docs/images/lut_a01_IME08_20261017T094335.jpg)
+
+2 km crops at 10 m, the same display for all (reflectance 0 to 0.3):
+
+![2 km crops](docs/images/lut_a01_crops.jpg)
+
+### An L1D made with 01.01
+
+IME03, 17 Oct 2026, made by the 01.01 Docker image run as PDGS runs it: the quicklook, then the L1D image with its cloud mask (CLM: red thick cloud, orange thin cloud, blue shadow) and cloud confidence (COM).
+
+![L1D quicklook](docs/images/l1d_0101_quicklook.jpg)
+
+![L1D cloud mask](docs/images/l1d_0101_cloud_mask.jpg)
+
+The pictures are in `docs/images/`, which `.gitattributes` leaves out of `git archive`: they are not in the Docker build context, nor in GitHub's "Download ZIP".
+
 ## Installation and offline deployment
 
 ```bash
@@ -256,6 +299,7 @@ src/iride_eaglet_processor/
     product_xml.py          L1D header of the product XML (Enrico's template)
     colour_correction.py    LUT, class model, hybrid; the L1D image writer (COG)
     previews.py             quicklook (PNG, transparent no data) and thumbnail (JPEG) from the L1D image
+docs/images/                pictures in this README (not in the Docker build: .gitattributes)
 docker/
     Dockerfile-e2l1d-trixie               the Docker image for PDGS, in the format of the PDGS build
     Eaglet-2-L1D-requirements-trixie.txt  its Python packages
