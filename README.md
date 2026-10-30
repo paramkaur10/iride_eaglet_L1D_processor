@@ -139,7 +139,7 @@ radiometry with A01, and the LUT fitted on A00 products no longer fits it; the
 first A01 products (13 to 15 Oct) had calibration problems and were not used.
 One colour balance fits every satellite measured (IME01 to IME04): a balance
 per satellite does no better. The LUT is fitted offline with
-`tools/build_lut.py`, a local tool that is not part of this repository:
+`tools/build_lut.py` (see `tools/README.md`; not in the Docker build):
 Sentinel-2 L1C within 3 days of each product (6 when that leaves less than
 half of it clear), EAGLET fitted onto it, the near-infrared share of each band
 and the colour balance of the delivered calibration measured on the pixel
@@ -300,6 +300,7 @@ src/iride_eaglet_processor/
     colour_correction.py    LUT, class model, hybrid; the L1D image writer (COG)
     previews.py             quicklook (PNG, transparent no data) and thumbnail (JPEG) from the L1D image
 docs/images/                pictures in this README (not in the Docker build: .gitattributes)
+tools/                      the LUT tools: tools/README.md (not in the Docker build: .gitattributes)
 docker/
     Dockerfile-e2l1d-trixie               the Docker image for PDGS, in the format of the PDGS build
     Eaglet-2-L1D-requirements-trixie.txt  its Python packages
