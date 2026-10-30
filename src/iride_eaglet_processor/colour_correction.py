@@ -34,6 +34,11 @@ GAIN and OFFSET from the product XML's Rescaling_Factors. DN = 0 in any band is
 no data. Output: the L1D image, a Cloud Optimized GeoTIFF (LZW, lossless) with
 the Sentinel-2 encoding: uint16 = rho * 10000 + 1000, 0 = no data, so
 rho = value * 0.0001 - 0.1.
+
+A pixel saturated in the L1C (DN 65535, the top of the uint16 range, in any
+band) has lost its colour: each band's GAIN turns the same clipped DN into a
+different reflectance, which shows as purple. The L1D writes it white instead:
+its three bands at the highest of its three reflectances.
 """
 
 import base64
@@ -57,7 +62,8 @@ NODATA_OUT = 0
 # overviews down to one tile, averaged (no-data pixels left out)
 COG_OPTIONS = dict(compress="LZW", predictor="YES", blocksize=512, overviews="AUTO", resampling="AVERAGE",
                    bigtiff="IF_SAFER", num_threads="ALL_CPUS")
-RENDER_PERCENTILES = (2, 98)  # per-band display range written to the STAC renders
+RENDER_PERCENTILES = (2, 98)  # display range (STAC renders, quicklooks): dark level of each band, span of the three
+SATURATED_DN = 65535          # an L1C band at the top of the uint16 range is clipped: the pixel is written white
 
 
 class ColourCorrectionError(Exception):
@@ -302,6 +308,27 @@ def percentiles_from_counts(counts, percentiles=RENDER_PERCENTILES):
     return out
 
 
+def display_range(counts, percentiles=RENDER_PERCENTILES):
+    """
+    [[low, high]] per band, in L1D values, from (3, 65536) counts of the
+    values of the pixels not saturated. Each band starts at its own dark
+    level, its 2nd percentile: the haze, which top-of-atmosphere colour has
+    most of in blue. The three bands share one span, the 98th percentile of
+    the three after their dark levels. So a display with this range takes
+    the haze (the blue cast) away and keeps the colour balance of the
+    correction; a stretch of each band to its own 98th percentile would
+    re-balance the colours of every scene (a large thin cloud turns green).
+    """
+    lows = [low for low, _ in percentiles_from_counts(counts, percentiles)]
+    pooled = np.zeros(65536, np.int64)               # the three bands, each minus its dark level
+    for c, low in zip(counts, lows):
+        pooled[0] += c[:low].sum()
+        pooled[:65536 - low] += c[low:]
+    total = pooled.sum()
+    span = int(np.searchsorted(np.cumsum(pooled), total * percentiles[1] / 100.0)) if total else 1
+    return [[low, min(low + max(span, 1), 65535)] for low in lows]
+
+
 def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=1024, strip=512):
     """
     Colour-corrects the L1C image tif_path with cc's method and writes the
@@ -310,10 +337,12 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
     predictor (lossless), 512 x 512 tiles and internal overviews.
     The image is read and corrected in tiles, so memory stays small whatever
     the product size; the tiles go to a plain tiled GeoTIFF first, which
-    GDAL's COG driver then rewrites as the COG.
-    Returns a dict of facts for the logs, the XML and the STAC entry: per-band
-    2nd / 98th percentiles (for display) and the seconds spent correcting and
-    writing the COG.
+    GDAL's COG driver then rewrites as the COG. A pixel saturated in the L1C
+    (DN SATURATED_DN in any band) is written white: its three bands at the
+    highest of its three reflectances.
+    Returns a dict of facts for the logs, the XML and the STAC entry: the
+    display range (display_range() of the pixels not saturated), the number of
+    saturated pixels and the seconds spent correcting and writing the COG.
     """
     import rasterio
     from rasterio.shutil import copy as copy_dataset
@@ -327,7 +356,7 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
     out_path = Path(out_path)
     tiles_path = out_path.with_name(out_path.name + ".tiles.tif")    # plain tiled GeoTIFF, removed at the end
     part_path = out_path.with_name(out_path.name + ".part")          # the COG while it is being written
-    counts = np.zeros((3, 65536), np.int64)                          # values of the valid pixels, per band
+    counts = np.zeros((3, 65536), np.int64)          # values of the valid pixels not saturated, per band
 
     def valid_px(dn, nodata):
         v = (dn > 0).all(0)
@@ -365,13 +394,15 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
                            crs=src.crs, transform=src.transform, tiled=True, blockxsize=512, blockysize=512,
                            photometric="RGB", BIGTIFF="IF_SAFER")
             n_tiles = -(-H // tile) * -(-W // tile)
-            done, n_valid = 0, 0
+            done, n_valid, n_saturated = 0, 0, 0
             with rasterio.open(tiles_path, "w", **profile) as dst:
                 dst.update_tags(COLOUR_METHOD=cc.method, COLOUR_AUX_FILE=cc.name,
                                 ENCODING="uint16 = reflectance * 10000 + 1000, 0 = no data",
                                 CALIBRATION="reflectance = DN * GAIN + OFFSET, product XML Rescaling_Factors",
                                 BRIGHTNESS="as delivered" if cc.method != "CLASS_MODEL"
-                                else "close to Sentinel-2 (class model)")
+                                else "close to Sentinel-2 (class model)",
+                                SATURATED=f"L1C DN {SATURATED_DN} in any band: written white, the three bands at "
+                                          "the highest of the three reflectances")
                 for b, name in enumerate(("red", "green", "blue"), 1):
                     dst.set_band_description(b, name)
                 for r0 in range(0, H, tile):
@@ -385,10 +416,15 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
                         if len(rr):
                             rho = dn[:, rr, cc_].T * gains + offsets
                             around = cc.around_at(amap, r0 + rr, c0 + cc_, f) if cc.needs_around else None
-                            values = encode(cc.apply(rho, around))
+                            out = cc.apply(rho, around)
+                            sat = (dn[:, rr, cc_] >= SATURATED_DN).any(0)
+                            if sat.any():       # white, not the purple the band gains give a clipped DN
+                                out[sat] = rho[sat].max(1, keepdims=True)
+                                n_saturated += int(sat.sum())
+                            values = encode(out)
                             arr[:, rr, cc_] = values.T
                             for b in range(3):
-                                counts[b] += np.bincount(values[:, b], minlength=65536)
+                                counts[b] += np.bincount(values[~sat, b], minlength=65536)
                             n_valid += len(rr)
                         dst.write(arr, window=win)
                         done += 1
@@ -404,5 +440,6 @@ def write_colour_product(tif_path, gains, offsets, out_path, cc, logger, tile=10
             if p.exists():
                 p.unlink()
     return dict(method=cc.method, aux_file=cc.name, aux_version=cc.version, valid_pixels=n_valid,
-                width=W, height=H, rescale=percentiles_from_counts(counts),
+                saturated_pixels=n_saturated,
+                width=W, height=H, rescale=display_range(counts),
                 seconds_correction=t_corrected - t_start, seconds_cog=t_done - t_corrected)

@@ -7,7 +7,7 @@ IRIDE Processor ICD (PDGS-ID-XPR-IRIDE-0209 v2.4). The input product is never
 modified. Python 3.10 or newer. Runs on CPU only: no GPU is used, even on a
 machine that has one.
 
-Processor `EAGLET2_L1D_PROC`, task `EAGLET2_L1D`, version `01.01` (this
+Processor `EAGLET2_L1D_PROC`, task `EAGLET2_L1D`, version `01.02` (this
 repository is `iride_eaglet_processor_v2`). The same version is written in
 the STAC of every product it makes (`processing:software`).
 
@@ -86,13 +86,13 @@ product (`AUX_DATA/*.anc.xml`).
 
 | In the L1D product | Content |
 |---|---|
-| `IMG_DATA/<NEW_ID>.tif` | **the L1D image**: colour-corrected RGB (true colour), Cloud Optimized GeoTIFF, LZW with predictor (lossless), 512 x 512 tiles, internal overviews; uint16 = reflectance x 10000 + 1000 (Sentinel-2 L1C convention), 0 = no data. It replaces the L1C image |
+| `IMG_DATA/<NEW_ID>.tif` | **the L1D image**: colour-corrected RGB (true colour), Cloud Optimized GeoTIFF, LZW with predictor (lossless), 512 x 512 tiles, internal overviews; uint16 = reflectance x 10000 + 1000 (Sentinel-2 L1C convention), 0 = no data; white where the L1C is saturated (see Colour correction). It replaces the L1C image |
 | `AUX_DATA/<NEW_ID>.CLM.tif` | cloud mask, uint8: 0 no data, 1 clear, 2 thick cloud, 3 thin cloud, 4 cloud shadow. A pixel is cloud when its cloud confidence (the COM) is at least 0.5, thick or thin by whichever of the two is more likely; any other pixel is cloud shadow when OmniCloudMask finds shadow more likely than clear, clear otherwise. So the cloud in the CLM is exactly COM >= 5000 |
 | `AUX_DATA/<NEW_ID>.COM.tif` | cloud confidence: OmniCloudMask's probability of thick plus thin cloud, uint16, x 10000 |
 | `AUX_DATA/<NEW_ID>.CLM.json` | class legend |
-| `<NEW_ID>.json` | STAC: L1D identity (`collection` `IME-1DSP-RGB3`, description and collection link "Level 1D" / "L1D", `processing:level` `L1D`, `processing:lineage` = the input L1C product ID, `processing:software` `{"Eaglet-2 Level 1D processor": "01.01"}`); `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (title "Eaglet-2 Level 1D", band descriptions "Level-1D ...", COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (2nd / 98th percentile per band); `quicklook` points to the PNG and `thumbnail` to the JPEG (the reverse of the L1C); new id and times; `file:checksum` / `file:size` of every asset recomputed |
-| `<NEW_ID>.xml` | the L1C XML as in Enrico's L1D template (12 Oct 2026): `PRODUCT_ID` = `<NEW_ID>`, `PROCESSING_LEVEL` `L1D`, `GENERATION_TIME` = the generation time of the run (as in the product name and the STAC), `AUXILIARY_FILE` = only the colour AUX file used (name without `.xml` or `.zip`), `INPUT_PRODUCTS` = the input L1C zip, `Processor_Version` `01.01`; `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image. Everything else as in the L1C, as the template asks: element names (Level-1C), outliers, RPC |
-| `PREVIEW/*` | PNG and JPEG drawn from the L1D image, with the same names, formats and sizes as in the L1C product (one linear stretch for the three bands, 1st to 99th percentile). The PNG is RGBA, transparent where there is no data; the JPEG has no transparency, so no data is black there. The KML places the PNG on the map (the L1C one places the JPEG) |
+| `<NEW_ID>.json` | STAC: L1D identity (`collection` `IME-1DSP-RGB3`, description and collection link "Level 1D" / "L1D", `processing:level` `L1D`, `processing:lineage` = the input L1C product ID, `processing:software` `{"Eaglet-2 Level 1D processor": "01.02"}`); `eo:cloud_cover`; assets `clm`, `com`, `clm_aux`; the `rgb` asset describes the L1D image (title "Eaglet-2 Level 1D", band descriptions "Level-1D ...", COG media type, `raster:scale` 0.0001, `raster:offset` -0.1, `nodata` 0, method and AUX file) and its render range is recomputed (each band from its 2nd percentile, over one span for the three bands, the 98th percentile of the three after it; saturated pixels left out); `quicklook` points to the PNG and `thumbnail` to the JPEG (the reverse of the L1C); new id and times; `file:checksum` / `file:size` of every asset recomputed |
+| `<NEW_ID>.xml` | the L1C XML as in Enrico's L1D template (12 Oct 2026): `PRODUCT_ID` = `<NEW_ID>`, `PROCESSING_LEVEL` `L1D`, `GENERATION_TIME` = the generation time of the run (as in the product name and the STAC), `AUXILIARY_FILE` = only the colour AUX file used (name without `.xml` or `.zip`), `INPUT_PRODUCTS` = the input L1C zip, `Processor_Version` `01.02`; `Rescaling_Factors` (GAIN 0.0001, OFFSET -0.1) and the image SHA-256 set for the L1D image. Everything else as in the L1C, as the template asks: element names (Level-1C), outliers, RPC |
+| `PREVIEW/*` | PNG and JPEG drawn from the L1D image, with the same names, formats and sizes as in the L1C product. They use the STAC render range, then a gamma of 1.6: each band starts at its own dark level, which takes away the haze of top-of-atmosphere colour (the blue cast), and the three bands share one span, which keeps the colours of the correction. Saturated clouds show white. The PNG is RGBA, transparent where there is no data; the JPEG has no transparency, so no data is black there. The KML places the PNG on the map (the L1C one places the JPEG) |
 
 Files that are already compressed (`.tif`, `.png`, `.jpg`) are stored in the
 zip without compressing them again.
@@ -106,6 +106,13 @@ cloud mask, at full resolution, tile by tile, on the product's own grid.
 **Input:** reflectance = DN x GAIN + OFFSET, with GAIN and OFFSET from the
 L1C product XML (`Rescaling_Factors`, correct from 24 September 2026). The
 rounded `raster:scale` of the STAC file is only a fallback. DN = 0 is no data.
+
+**Saturation:** where the L1C is saturated (DN 65535, the top of the uint16
+range, in any band; the bright cores of clouds), the pixel has lost its
+colour. Each band's GAIN turns the same clipped DN into a different
+reflectance, blue highest, which looks purple. The L1D writes such a pixel
+white: its three bands at the highest of its three reflectances. The log gives
+the number of saturated pixels, and the image's `SATURATED` tag the rule.
 
 **Configuration:** one AUX file,
 `IME___AXE1D_CLUT_20240101T000000_20990101T000000_<created>____________O_001.xml`,
@@ -228,7 +235,7 @@ its own wrapper script, as:
 
 ```bash
 docker run --user 1100:600 --cpus 2 -v <WD>:<WD>:rw -w <WD> ... \
-    ipf-ime-msi-l1d:01.01 EAGLET2_L1D <WD>/JobOrder.<id>.xml
+    ipf-ime-msi-l1d:01.02 EAGLET2_L1D <WD>/JobOrder.<id>.xml
 ```
 
 `EAGLET2_L1D`, the entry point, is a link to `process_l1c.py`, which runs in
@@ -240,9 +247,9 @@ Build, test and save for delivery, on a machine with Docker and internet,
 after `python download_models.py`:
 
 ```bash
-docker/build_image.sh                                 # image ipf-ime-msi-l1d:01.01
+docker/build_image.sh                                 # image ipf-ime-msi-l1d:01.02
 docker/test_image.sh <L1C zip> [<reference L1D zip>]  # runs it as PDGS does and checks the result
-docker/build_image.sh --save                          # dist/IPF-IME-MSI-L1D-01.01.tar.gz and its SHA-256
+docker/build_image.sh --save                          # dist/IPF-IME-MSI-L1D-01.02.tar.gz and its SHA-256
 ```
 
 `docker/build_image.sh` makes the build context in `dist/build/` (the zip is
@@ -350,6 +357,13 @@ Decided:
   least 0.5. Before, each pixel took the most likely of OmniCloudMask's four
   classes, which left clear the clouds whose probability was split between
   thick and thin (clear 0.4, thick 0.3, thin 0.3 is 0.6 cloud).
+- Feedback on the first L1D panels (21 Oct 2026), version 01.02: the
+  quicklook takes each band from its own dark level (the haze, largest in
+  blue) over one span for the three bands, with a gamma of 1.6, instead of one
+  stretch for the three bands, which left the L1D bluish (a stretch of each
+  band to its own top re-balanced the colours: a large thin cloud turned
+  green); and clouds saturated in the L1C are white in the L1D, not purple.
+  The L1D image is unchanged except at saturated pixels.
 
 Open items:
 

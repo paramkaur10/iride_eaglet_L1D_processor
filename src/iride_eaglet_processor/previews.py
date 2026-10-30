@@ -11,6 +11,17 @@ KML places the PNG on the map instead of the JPEG. The KML is pointed at the
 renamed files after the product is renamed. In the STAC of the L1D the PNG is
 the "quicklook" and the JPEG the "thumbnail", the reverse of the L1C
 (metadata.point_quicklook_at_png).
+
+The stretch is the display range of the STAC renders, from the colour step
+(the whole image at full resolution, saturated pixels left out;
+colour_correction.display_range): each band starts at its own dark level, its
+2nd percentile, and the three bands share one span, the 98th percentile of
+the three after their dark levels; then a gamma of 1.6 brightens it. One
+stretch for the three bands, as before 01.02, left the quicklooks bluish: the
+haze of top-of-atmosphere colour, which the LUT keeps, as Sentinel-2 L1C has
+it, and which is largest in blue. Taking each band's dark level away removes
+it; the shared span keeps the colours of the correction. Clouds saturated in
+the L1C are white in the L1D image, so they show white.
 """
 
 import re
@@ -18,16 +29,23 @@ from pathlib import Path
 
 import numpy as np
 
+from iride_eaglet_processor.colour_correction import RENDER_PERCENTILES
+
 PREVIEW_IMAGES = (".jpg", ".jpeg", ".png")
-STRETCH_PERCENTILES = (1, 99)    # one linear stretch for the three bands, so the colours stay as corrected
+STRETCH_PERCENTILES = RENDER_PERCENTILES   # (2, 98): dark level of each band, span of the three (no range given)
+GAMMA = 1.6                                # display brightness, after the stretch
 JPEG_QUALITY = 90
 KML_HREF = re.compile(rb"(<href>)([^<]*)(</href>)", re.I)
 
 
-def make_l1d_previews(product_root, image_path, logger):
+def make_l1d_previews(product_root, image_path, logger, limits=None):
     """
     Redraws every JPEG / PNG in PREVIEW from the L1D image (image_path), at
-    each file's own size and in its own format. A PNG is written as RGBA:
+    each file's own size and in its own format: each band stretched between
+    its limits, then GAMMA. limits: [[low, high]] per band in L1D values, the
+    render range of the colour step; without it, the same kind of range from
+    the largest quicklook (each band's 2nd percentile, the 98th percentile of
+    the three after it as the span). A PNG is written as RGBA:
     alpha 0 (transparent) where there is no data, 255 elsewhere. A JPEG keeps
     its colour mode, with no data black. Then the KML places the PNG on the
     map (point_kml_at_png). Returns the image files written.
@@ -46,15 +64,23 @@ def make_l1d_previews(product_root, image_path, logger):
             specs[p] = (im.size, im.mode, im.format)
 
     lo = hi = None
+    if limits is not None:
+        lo, hi = np.asarray(limits, dtype="float64").T
+        hi = np.maximum(hi, lo + 1.0)
     with rasterio.open(image_path) as src:
-        for p in sorted(paths, key=lambda q: -specs[q][0][0] * specs[q][0][1]):   # largest first: it sets the stretch
+        for p in sorted(paths, key=lambda q: -specs[q][0][0] * specs[q][0][1]):   # largest first (sets lo, hi
             (w, h), mode, fmt = specs[p]
             a = src.read([1, 2, 3], out_shape=(3, h, w), resampling=Resampling.average).astype("float32")
             valid = (a > 0).all(0)
-            if lo is None:
-                lo, hi = np.percentile(a[:, valid], STRETCH_PERCENTILES) if valid.any() else (0.0, 1.0)
-                hi = max(hi, lo + 1.0)
-            rgb = np.clip((a - lo) / (hi - lo) * 255 + 0.5, 0, 255).astype("uint8")
+            if lo is None:                         # when no limits are given), per band
+                if valid.any():
+                    lo = np.percentile(a[:, valid], STRETCH_PERCENTILES[0], axis=1)
+                    hi = lo + np.percentile((a[:, valid] - lo[:, None]).ravel(), STRETCH_PERCENTILES[1])
+                else:
+                    lo, hi = np.zeros(3), np.ones(3)
+                hi = np.maximum(hi, lo + 1.0)
+            x = np.clip((a - lo[:, None, None]) / (hi - lo)[:, None, None], 0, 1) ** (1 / GAMMA)
+            rgb = np.clip(x * 255 + 0.5, 0, 255).astype("uint8")
             rgb[:, ~valid] = 0
             img = Image.fromarray(np.ascontiguousarray(np.moveaxis(rgb, 0, -1)), "RGB")
             if fmt == "PNG":
@@ -67,6 +93,9 @@ def make_l1d_previews(product_root, image_path, logger):
             img.save(tmp, format=fmt, **({"quality": JPEG_QUALITY} if fmt == "JPEG" else {}))
             tmp.replace(p)
             logger.info(f"Quicklook drawn from the L1D image: PREVIEW/{p.name} ({fmt} {img.mode} {w} x {h})")
+    logger.info("Quicklook stretch, each band from its dark level over one span (L1D values): "
+                + ", ".join(f"{band} {low:.0f} to {high:.0f}" for band, low, high in zip("RGB", lo, hi))
+                + f", gamma {GAMMA}")
     point_kml_at_png(product_root, logger)
     return paths
 

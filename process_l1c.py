@@ -37,7 +37,8 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
         IMG_DATA/<NEW_ID>.tif        the L1D image, in place of the L1C one:
                                      colour-corrected RGB (true colour), Cloud
                                      Optimized GeoTIFF, LZW (lossless), uint16
-                                     = reflectance x 10000 + 1000, 0 = no data
+                                     = reflectance x 10000 + 1000, 0 = no data;
+                                     white where the L1C is saturated
         AUX_DATA/<NEW_ID>.CLM.tif    5-class cloud mask
         AUX_DATA/<NEW_ID>.COM.tif    cloud confidence map
         AUX_DATA/<NEW_ID>.CLM.json   class legend
@@ -59,7 +60,10 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
                                      Rescaling_Factors (GAIN 0.0001, OFFSET -0.1)
                                      and the image SHA-256 set for the L1D image
         PREVIEW/<NEW_ID>.QLK.*       PNG and JPEG drawn from the L1D image (same
-                                     names, formats and sizes as in the L1C);
+                                     names, formats and sizes as in the L1C),
+                                     stretched with the STAC render range
+                                     (each band from its dark level, one span
+                                     for the three) and a gamma of 1.6;
                                      the PNG is RGBA, transparent where there is
                                      no data; the KML places the PNG on the map
                                      (the L1C one places the JPEG)
@@ -187,7 +191,7 @@ from iride_eaglet_processor.calibration import find_product_xml, set_l1d_image_i
 from iride_eaglet_processor.product_xml import set_l1d_header_in_xml
 from iride_eaglet_processor.previews import make_l1d_previews, point_kml_at_renamed_files
 from iride_eaglet_processor.colour_correction import (
-    ColourCorrection, ColourCorrectionError, write_colour_product, L1D_GAIN, L1D_OFFSET,
+    ColourCorrection, ColourCorrectionError, write_colour_product, L1D_GAIN, L1D_OFFSET, SATURATED_DN,
 )
 
 
@@ -200,7 +204,7 @@ from iride_eaglet_processor.colour_correction import (
 # the STAC of the product (processing:software) and is the tag of the
 # Docker image.
 PROCESSOR_NAME = "EAGLET2_L1D_PROC"
-PROCESSOR_VERSION = "01.01"
+PROCESSOR_VERSION = "01.02"
 TASK_NAME = "EAGLET2_L1D"
 TASK_VERSION = "01.00"
 
@@ -318,6 +322,9 @@ def make_l1d_image(product, cc, logger):
     logger.info(f"L1D image: IMG_DATA/{tif_path.name} (COG, LZW), {info['valid_pixels']} valid pixels, "
                 f"method {info['method']}; colour correction {info['seconds_correction']:.1f} s, "
                 f"COG writing {info['seconds_cog']:.1f} s")
+    share = 100.0 * info["saturated_pixels"] / max(info["valid_pixels"], 1)
+    logger.info(f"Saturated in the L1C (DN {SATURATED_DN} in a band): {info['saturated_pixels']} pixels "
+                f"({share:.3f}%), written white")
     return info
 
 
@@ -416,7 +423,7 @@ def process_product(input_zip_path, cc, device, logger, timer, environment=None,
     timer.mark("colour correction", last_part=("COG writing", l1d["seconds_cog"]))
 
     # --- quicklooks drawn from the L1D image ---------------------------------------
-    make_l1d_previews(old_product_root, product["tif_path"], logger)
+    make_l1d_previews(old_product_root, product["tif_path"], logger, limits=l1d["rescale"])
     timer.mark("quicklooks")
 
     # --- the new L1D product ID (generation time = now): the XML header names it ---------

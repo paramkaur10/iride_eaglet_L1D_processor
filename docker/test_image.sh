@@ -308,7 +308,7 @@ sys.exit(0 if same else 1)' "/vsizip//zips_a/$a.zip/$a/IMG_DATA/$a.tif" "/vsizip
 fi
 
 echo
-grep -E "Colour correction: method|Processing times" "$LOG" | sed 's/^.* : //'
+grep -E "Colour correction: method|Saturated in the L1C|Quicklook stretch|Processing times" "$LOG" | sed 's/^.* : //'
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ALL CHECKS PASSED"

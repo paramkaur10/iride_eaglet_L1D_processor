@@ -147,8 +147,9 @@ def describe_l1d_image(stac, l1d_info, logger):
     Points the "rgb" asset at the L1D image: COG media type, band encoding
     (raster:scale / raster:offset / nodata / data_type; band statistics of
     the L1C dropped), title and description with the colour method; and the
-    display range of the renders that use it (rescale: 2nd / 98th percentile
-    of each band of the L1D image).
+    display range of the renders that use it (rescale: each band of the L1D
+    image from its 2nd percentile, over one span for the three bands, the
+    98th percentile of the three after it; saturated pixels left out).
     """
     asset = stac["assets"].get(IMAGE_ASSET)
     if asset is None:
