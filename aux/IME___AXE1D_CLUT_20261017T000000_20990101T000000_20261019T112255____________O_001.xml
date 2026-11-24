@@ -2,14 +2,14 @@
 <Earth_Explorer_File>
   <Earth_Explorer_Header>
     <Fixed_Header>
-      <File_Name>IME___AXE1D_CLUT_20240101T000000_20990101T000000_20261019T112255____________O_001</File_Name>
+      <File_Name>IME___AXE1D_CLUT_20261017T000000_20990101T000000_20261019T112255____________O_001</File_Name>
       <File_Description>EAGLET-2 RGB3 colour correction: LUT towards Sentinel-2 L1C and Enrico's class model; Method selects which one the processor applies</File_Description>
       <Notes>One file for the whole constellation. Input: DN x GAIN + OFFSET from the product XML (correct from 2026-09-24). LUT and HYBRID keep the brightness as delivered; CLASS_MODEL brings it close to Sentinel-2</Notes>
       <Mission>IRIDE</Mission>
       <File_Class>OPER</File_Class>
       <File_Type>AXE1D_CLUT</File_Type>
       <Validity_Period>
-        <Validity_Start>UTC=2024-01-01T00:00:00</Validity_Start>
+        <Validity_Start>UTC=2026-10-17T00:00:00</Validity_Start>
         <Validity_Stop>UTC=2099-01-01T00:00:00</Validity_Stop>
       </Validity_Period>
       <File_Version>0001</File_Version>

@@ -17,7 +17,7 @@
        12 Oct 2026). The Version is also written in the STAC of the product
        (processing:software) and is the tag of the Docker image. -->
   <Processor_Name>EAGLET2_L1D_PROC</Processor_Name>
-  <Version>01.01</Version>
+  <Version>01.02</Version>
   <!-- Largest L1C RGB3 product observed so far is ~1.3GB. The product is
        held unzipped, renamed and re-zipped; the L1D image is first written
        as a plain GeoTIFF (uint16, 3 bands), then as the COG that replaces

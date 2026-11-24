@@ -7,7 +7,11 @@ __pycache__/
 .venv/
 venv/
 
-# OmniCloudMask weights, filled by download_models.py (large, not versioned)
+# the cloud model package (Clarity), unzipped from its delivery zip into models/: not versioned
+# (see models/README.md); only models/README.md is
+models/*
+!models/README.md
+# OmniCloudMask's weights, used up to 01.01 (filled by download_models.py, which is gone)
 hf_cache/
 
 # local test runs

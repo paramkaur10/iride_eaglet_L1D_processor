@@ -9,8 +9,9 @@
 # Makes a new working directory under $TEST_ROOT (default /var/tmp/eaglet2_l1d_test; not under
 # /root, which user 1100 cannot enter, in the container too), copies the product zip into it, writes
 # the Job Order as PDGS would, runs the image and checks the result. With a reference L1D zip, made
-# without Docker from the same product with the same colour method, the L1D image must have the same
-# pixels (compared in the image, with its Python and rasterio).
+# without Docker from the same product with the same colour method and the same processor version, the
+# L1D image must have the same pixels (compared in the image, with its Python and rasterio); an L1D of
+# 01.01 differs from one of 01.02 where the L1C is saturated (white in 01.02).
 # The Job Order also gives the colour AUX file (AXE1D_CLUT) as PDGS hands AUX files over: <ID>.zip holding
 # <ID>/<ID>.xml and a header <ID>/<ID>.hdr (PDGS run of 20 Oct 2026). By default it is the newest AUX file in
 # aux/; AUX=<.xml file> packs another one the same way, AUX=<.zip file> gives that zip as it is, and AUX=none
@@ -214,6 +215,8 @@ check "exit code 0 (got $CODE)" [ "$CODE" -eq 0 ]
 check "log ends with [Stop] exit_code=0" grep -q "\[Stop\] exit_code=0" "$LOG"
 check "the processor uses $CPUS CPU threads (Number_of_CPUs)" \
     grep -q "Inference device: cpu (the processor runs on CPU only), $CPUS threads" "$LOG"
+check "cloud model Clarity, its package checked against its SHA256SUMS" \
+    grep -q "Cloud model: Clarity (.*files checked against its SHA256SUMS" "$LOG"
 if [ -n "$AUX_FILE" ]; then
     check "colour AUX file from the Job Order, read from the zip: $AUX_FILE" \
         grep -q "Colour correction: method .*, AUX $AUX_ID (version .*), read from $AUX_FILE (" "$LOG"
@@ -308,7 +311,8 @@ sys.exit(0 if same else 1)' "/vsizip//zips_a/$a.zip/$a/IMG_DATA/$a.tif" "/vsizip
 fi
 
 echo
-grep -E "Colour correction: method|Processing times" "$LOG" | sed 's/^.* : //'
+grep -E "Colour correction: method|Saturated in the L1C|Quicklook stretch|Processing times" "$LOG" \
+    | sed 's/^.* : //'
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ALL CHECKS PASSED"

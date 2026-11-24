@@ -25,10 +25,11 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
     machine (Section 2.1).
   * Writes only in the working directory (Section 2.1): temporary files
     and library caches go to a scratch folder there, removed at the end.
-  * Runs fully offline: OmniCloudMask's model weights are read from
-    hf_cache/omnicloudmask, shipped with the processor (filled once by
-    download_models.py), never downloaded at run time and never looked for
-    in the home folder. Required for air-gapped deployment (IRIDE PDGS).
+  * Runs fully offline: the cloud model (Clarity) is read from its package in
+    models/clarity_eaglet2_fp32, shipped with the processor and checked
+    against the package's own SHA256SUMS, never downloaded at run time and
+    never looked for in the home folder. Required for air-gapped deployment
+    (IRIDE PDGS).
   * Generates a NEW L1D output product from the L1C input (naming: "1CSP"
     -> "1DSP", generation timestamp = this run's processing time, environment
     and baseline from the Job Order). The
@@ -37,7 +38,8 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
         IMG_DATA/<NEW_ID>.tif        the L1D image, in place of the L1C one:
                                      colour-corrected RGB (true colour), Cloud
                                      Optimized GeoTIFF, LZW (lossless), uint16
-                                     = reflectance x 10000 + 1000, 0 = no data
+                                     = reflectance x 10000 + 1000, 0 = no data;
+                                     white where the L1C is saturated
         AUX_DATA/<NEW_ID>.CLM.tif    5-class cloud mask
         AUX_DATA/<NEW_ID>.COM.tif    cloud confidence map
         AUX_DATA/<NEW_ID>.CLM.json   class legend
@@ -59,7 +61,10 @@ PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
                                      Rescaling_Factors (GAIN 0.0001, OFFSET -0.1)
                                      and the image SHA-256 set for the L1D image
         PREVIEW/<NEW_ID>.QLK.*       PNG and JPEG drawn from the L1D image (same
-                                     names, formats and sizes as in the L1C);
+                                     names, formats and sizes as in the L1C),
+                                     stretched with the STAC render range
+                                     (each band from its dark level, one span
+                                     for the three) and a gamma of 1.6;
                                      the PNG is RGBA, transparent where there is
                                      no data; the KML places the PNG on the map
                                      (the L1C one places the JPEG)
@@ -133,15 +138,6 @@ if len(sys.argv) == 2:
     except OSError:
         _SCRATCH_DIR = None     # e.g. no such folder: the Job Order check reports it
 
-# --- Offline Hugging Face model cache -----------------------------------
-# Must be set before importing anything that transitively imports
-# huggingface_hub (i.e. before importing iride_eaglet_processor.inference).
-# The model weights are read from hf_cache/omnicloudmask (MODEL_DIR in
-# inference.py); HF_HOME keeps any Hugging Face cache file in hf_cache/ too,
-# and HF_HUB_OFFLINE makes sure nothing is ever downloaded.
-os.environ.setdefault("HF_HOME", str(_PROCESSOR_ROOT / "hf_cache"))
-os.environ["HF_HUB_OFFLINE"] = "1"
-
 # --- CPU only -------------------------------------------------------------
 # The processor runs strictly on CPU: no GPU is made visible to torch, even
 # on a machine that has one. Must be set before torch is imported.
@@ -174,7 +170,7 @@ from iride_eaglet_processor.resampling import (
     downsample_to_target_resolution,
     upsample_prob_stack,
 )
-from iride_eaglet_processor.inference import run_omnicloud_on_array, limit_threads, model_weights, MODEL_DIR
+from iride_eaglet_processor.inference import CloudModel, limit_threads, MODEL_DIR
 from iride_eaglet_processor.masks import (
     probs_to_four_class_map,
     probs_to_cloud_confidence,
@@ -187,7 +183,7 @@ from iride_eaglet_processor.calibration import find_product_xml, set_l1d_image_i
 from iride_eaglet_processor.product_xml import set_l1d_header_in_xml
 from iride_eaglet_processor.previews import make_l1d_previews, point_kml_at_renamed_files
 from iride_eaglet_processor.colour_correction import (
-    ColourCorrection, ColourCorrectionError, write_colour_product, L1D_GAIN, L1D_OFFSET,
+    ColourCorrection, ColourCorrectionError, write_colour_product, L1D_GAIN, L1D_OFFSET, SATURATED_DN,
 )
 
 
@@ -200,7 +196,7 @@ from iride_eaglet_processor.colour_correction import (
 # the STAC of the product (processing:software) and is the tag of the
 # Docker image.
 PROCESSOR_NAME = "EAGLET2_L1D_PROC"
-PROCESSOR_VERSION = "01.01"
+PROCESSOR_VERSION = "01.02"
 TASK_NAME = "EAGLET2_L1D"
 TASK_VERSION = "01.00"
 
@@ -210,7 +206,7 @@ OUTPUT_FILE_TYPE = "1DSP__RGB3"      # the L1D product zip (Processing_Baseline_
 CLUT_FILE_TYPE = "AXE1D_CLUT"        # colour-correction AUX file (LUT + class model + Method)
 OWN_AUX_DIR = _PROCESSOR_ROOT / "aux"  # the processor's own AXE1D_CLUT file, used unless the Job Order gives one
 
-INFERENCE_RESOLUTION = 5.0   # m, OmniCloudMask's expected input resolution
+INFERENCE_RESOLUTION = 5.0   # m, the cloud model's grid (pixel_m in its sensor.json, checked at the start)
 
 # Files already compressed are stored in the output zip as they are
 # (deflating them again costs time and saves almost nothing)
@@ -262,16 +258,20 @@ def zip_product(product_root, output_zip_path, logger):
 INFERENCE_DEVICE = "cpu"       # the processor runs on CPU only (see CUDA_VISIBLE_DEVICES above)
 
 
-def select_device(logger):
-    """the CPU, used with at most CPU_THREADS threads; checks that the model weights shipped with the
-    processor are there (an error otherwise: nothing is downloaded at run time)"""
+def load_cloud_model(logger):
+    """the CPU, used with at most CPU_THREADS threads, and the cloud model (Clarity) on it, from the package
+    shipped with the processor, checked against its SHA256SUMS (an error otherwise: nothing is downloaded at
+    run time)"""
     threads, interop_threads = limit_threads(CPU_THREADS)
     logger.info(f"Inference device: {INFERENCE_DEVICE} (the processor runs on CPU only), {threads} threads "
                 f"(Number_of_CPUs {NUMBER_OF_CPUS}, {_AVAILABLE_CPUS} CPUs available, "
                 f"{interop_threads} inter-op threads)")
-    weights = model_weights()
-    logger.info(f"OmniCloudMask model weights: {', '.join(p.name for p in weights)} in {MODEL_DIR}")
-    return INFERENCE_DEVICE
+    model = CloudModel(MODEL_DIR, device=INFERENCE_DEVICE)
+    if model.pixel_m != INFERENCE_RESOLUTION:
+        raise ValueError(f"the cloud model reads a {model.pixel_m:g} m grid; the processor resamples to "
+                         f"{INFERENCE_RESOLUTION:g} m")
+    logger.info(f"Cloud model: {model.describe()}")
+    return model
 
 
 class StepTimer:
@@ -318,10 +318,13 @@ def make_l1d_image(product, cc, logger):
     logger.info(f"L1D image: IMG_DATA/{tif_path.name} (COG, LZW), {info['valid_pixels']} valid pixels, "
                 f"method {info['method']}; colour correction {info['seconds_correction']:.1f} s, "
                 f"COG writing {info['seconds_cog']:.1f} s")
+    share = 100.0 * info["saturated_pixels"] / max(info["valid_pixels"], 1)
+    logger.info(f"Saturated in the L1C (DN {SATURATED_DN} in a band): {info['saturated_pixels']} pixels "
+                f"({share:.3f}%), written white")
     return info
 
 
-def process_product(input_zip_path, cc, device, logger, timer, environment=None, baseline=None):
+def process_product(input_zip_path, cc, model, logger, timer, environment=None, baseline=None):
     """
     input_zip_path: absolute Path to the L1C RGB3 product zip, as supplied
     by the Job Order. Extracted and enriched under its original (L1C)
@@ -330,6 +333,7 @@ def process_product(input_zip_path, cc, device, logger, timer, environment=None,
     NEW output zip in the same working directory. The original input zip
     is never modified or deleted.
     cc: the colour correction (ColourCorrection), read from the AUX file of the Job Order or the processor's own.
+    model: the cloud model (inference.CloudModel).
     environment, baseline: for the L1D name, from the Job Order (None keeps the L1C's).
     Returns the output zip path.
     """
@@ -367,14 +371,20 @@ def process_product(input_zip_path, cc, device, logger, timer, environment=None,
     img_inf[:, ~valid_inf] = 0
     logger.info(f"Inference shape: {img_inf.shape}")
 
-    # --- inference (full-scene, no tiling) --------------------------------------
-    logger.progress("Running full-scene OmniCloudMask inference")
-    _, _, probs_inf = run_omnicloud_on_array(
-        img_inf, device=device, divide_by_10000=True, inference_dtype="fp32",
-    )
+    # The full-resolution image is no longer needed (the colour step reads the
+    # product again, tile by tile): freed before the model runs, which lowers
+    # the memory peak of the cloud step.
+    del image, image_chw
+    product.pop("image", None)
 
-    probs_inf[:, ~valid_inf] = 0.0
-    probs_inf[0, ~valid_inf] = 1.0
+    # --- inference (full scene: tiles blended, the 5 m and 15 m readings averaged) ---
+    logger.progress("Running full-scene cloud model inference (Clarity)")
+    img_inf /= 10000.0      # reflectance x 10000 -> reflectance, as before: the model reads reflectance
+    probs_inf, nothing = model.probabilities(img_inf)
+
+    no_reading = ~valid_inf | nothing      # nothing: where the model read no data
+    probs_inf[:, no_reading] = 0.0
+    probs_inf[0, no_reading] = 1.0
 
     probs_full = upsample_prob_stack(probs_inf, orig_h, orig_w)
     probs_full[:, ~valid_full] = 0.0
@@ -410,13 +420,12 @@ def process_product(input_zip_path, cc, device, logger, timer, environment=None,
     # --- the L1D image: colour correction, after the cloud mask ---------------------
     # The full-resolution arrays of the cloud step are no longer needed; free
     # them first. The colour step reads the image again tile by tile.
-    del image, image_chw, img_inf, probs_inf, probs_full, four_class, conf, four_class_out, valid_full
-    product.pop("image", None)
+    del img_inf, probs_inf, nothing, no_reading, probs_full, four_class, conf, four_class_out, valid_full
     l1d = make_l1d_image(product, cc, logger)
     timer.mark("colour correction", last_part=("COG writing", l1d["seconds_cog"]))
 
     # --- quicklooks drawn from the L1D image ---------------------------------------
-    make_l1d_previews(old_product_root, product["tif_path"], logger)
+    make_l1d_previews(old_product_root, product["tif_path"], logger, limits=l1d["rescale"])
     timer.mark("quicklooks")
 
     # --- the new L1D product ID (generation time = now): the XML header names it ---------
@@ -576,8 +585,8 @@ def main():
     logger.info(f"L1D name (generation time set at the end): {planned}")
 
     try:
-        device = select_device(logger)
-        output_path = process_product(input_zip_path, cc, device, logger, timer,
+        model = load_cloud_model(logger)
+        output_path = process_product(input_zip_path, cc, model, logger, timer,
                                       environment=environment, baseline=baseline)
         # the name relative to the working directory, as PDGS reads it (ICD 3.1.4.5)
         logger.info(f"OUTPUT_READY: {os.path.relpath(Path(output_path).resolve(), job_order['working_dir'])}")
