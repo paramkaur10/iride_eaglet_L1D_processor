@@ -21,17 +21,20 @@ Docker build context nor in GitHub's Download ZIP. Clone the repository to get t
 | `compare_l1d.py` | two L1D products of the same L1C, file by file: what differs, and how much their cloud masks agree |
 | `compare_panels.py` | two L1D versions of the same products side by side: quicklooks, cloud masks, cloud confidence and 2 km zooms where they differ |
 | `cloud_panels.py` | two L1D versions side by side with a map of what changed in the image (the cloud experiment) |
-| `l1d_figure.py` | one L1D product in one picture: quicklook, cloud mask and cloud confidence (the README figure) |
+| `readme_figure.py` | the README pictures: each L1D product in one row, L1C, Sentinel-2, L1D, cloud mask and cloud confidence |
 | `l1d_panels.py` | poster panels of L1D products: L1C, L1D, cloud mask and confidence, the scene on a map, the product facts |
 | `cloud_experiment/` | the test of 30 Oct 2026 that keeps clouds neutral in the colour step (not in the processor) |
 
-The tools that only read L1D products (`compare_l1d.py`, `compare_panels.py`, `l1d_figure.py`) run in the
-processor's own image, for example:
+The tools that only read L1D products (`compare_l1d.py`, `compare_panels.py`) run in the processor's own image,
+for example:
 
 ```bash
 docker run --rm -i --network none -v <folder A>:/a:ro -v <folder B>:/b:ro \
     ipf-ime-msi-l1d:01.02 python - /a /b < tools/compare_l1d.py
 ```
+
+`readme_figure.py` runs in the processor's image; to download Sentinel-2 when no LUT build has it on disk
+(`--fetch`) it also needs `requests`, installed for the run: the command is at the top of the file.
 
 ## Fit a new LUT
 

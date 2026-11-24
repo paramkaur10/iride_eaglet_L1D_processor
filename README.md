@@ -18,17 +18,32 @@ processors.
 | Input | L1C RGB3 product (`1CSP__RGB3`); optionally a colour AUX file (`AXE1D_CLUT`) |
 | Output | L1D product (`1DSP__RGB3`), next to the input |
 | Docker image | `ipf-ime-msi-l1d:01.02` (Python 3.14, Debian trixie) |
-| Resources | 2 CPU threads, no GPU, no network; about 6.5 to 9.5 minutes per product |
+| Resources | 2 CPU threads, no GPU, no network; about 6 to 10 minutes per product |
 
-![An L1D product: quicklook, cloud mask and cloud confidence](docs/images/l1d_example.jpg)
+![Syracuse, IME04, 17 Oct 2026, through processor 01.02](docs/images/l1d_IME04_20261017T093952.jpg)
+
+Syracuse, Sicily. From left: the L1C as delivered, Sentinel-2 L1C of the same place a few days apart, the L1D, its
+cloud mask and its cloud confidence, each drawn like the L1D quicklook. Five more products are under
+[Examples](#examples).
+
+## Documentation
+
+| Document | Content |
+|---|---|
+| [Interface Control Document](docs/EAGLET2_L1D_ICD.pdf) ([Word](docs/EAGLET2_L1D_ICD.docx)) | every interface with the PDGS: Docker image, Task Table, Job Order, inputs, the L1D product, log and exit codes |
+| [User Manual](docs/EAGLET2_L1D_User_Manual.pdf) ([Word](docs/EAGLET2_L1D_User_Manual.docx)) | installation, operation, using the L1D product, the auxiliary file configuration tool, troubleshooting and limitations |
+
+Both cover version 01.02 and follow the IRIDE PDGS documentation for processors.
 
 ## Contents
 
+- [Documentation](#documentation)
 - [How it works](#how-it-works)
 - [Running the processor](#running-the-processor)
 - [The L1D product](#the-l1d-product)
 - [Cloud mask](#cloud-mask)
 - [Colour correction](#colour-correction)
+- [Examples](#examples)
 - [Installation](#installation)
 - [Docker image](#docker-image)
 - [Tests](#tests)
@@ -158,6 +173,32 @@ Sentinel-2 L1C:
 The products side by side with Sentinel-2 are in [`docs/colour_lut.md`](docs/colour_lut.md). The LUT is fitted
 offline with the tools in [`tools/`](tools/README.md).
 
+## Examples
+
+Five more products of October 2026 through processor 01.02, drawn as the picture at the top
+([`tools/readme_figure.py`](tools/readme_figure.py)).
+
+New Orleans, Louisiana:
+
+![New Orleans, IME03, 17 Oct 2026, through processor 01.02](docs/images/l1d_IME03_20261017T164428.jpg)
+
+Bakshi Ka Talab, Uttar Pradesh:
+
+![Bakshi Ka Talab, IME01, 18 Oct 2026, through processor 01.02](docs/images/l1d_IME01_20261018T052237.jpg)
+
+Cliffside Park, New Jersey, across the Hudson from New York; the dark water of the river takes a purple cast:
+
+![Cliffside Park, IME03, 19 Oct 2026, through processor 01.02](docs/images/l1d_IME03_20261019T160108.jpg)
+
+North coast of Sicily, overcast:
+
+![North coast of Sicily, IME07, 20 Oct 2026, through processor 01.02](docs/images/l1d_IME07_20261020T100518.jpg)
+
+Southern Tyrrhenian Sea, almost all cloud; the brightest cloud tops are pink already in the L1C, with no
+saturated pixel:
+
+![Southern Tyrrhenian Sea, IME06, 21 Oct 2026, through processor 01.02](docs/images/l1d_IME06_20261021T093605.jpg)
+
 ## Installation
 
 Python 3.10 or newer:
@@ -225,7 +266,7 @@ src/iride_eaglet_processor/
 docker/                     the Docker image: Dockerfile, pinned packages, build and test scripts
 tests/                      unit and product tests (pytest)
 tools/                      offline tools: LUT fitting, comparisons and panels (tools/README.md)
-docs/                       pictures, the LUT examples and the VH-RODA poster
+docs/                       the ICD and the User Manual, pictures, the LUT examples and the VH-RODA poster
 ```
 
 `docs/`, `tools/` and `tests/` are left out of `git archive` (`.gitattributes`), so they are not in the Docker build
