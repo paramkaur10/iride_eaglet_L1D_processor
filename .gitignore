@@ -1,19 +1,20 @@
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.ipynb_checkpoints/
-.DS_Store
-
 .venv/
 venv/
 
-# the cloud model package (Clarity), unzipped from its delivery zip into models/: not versioned
-# (see models/README.md); only models/README.md is
+# notebooks and system files
+.ipynb_checkpoints/
+.DS_Store
+
+# the cloud model package (Clarity): not versioned, see models/README.md
 models/*
 !models/README.md
-# OmniCloudMask's weights, used up to 01.01 (filled by download_models.py, which is gone)
-hf_cache/
 
-# local test runs
+# local data, work folders and build output
+data/
+lut_builds/
 test_wd/
 dist/

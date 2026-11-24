@@ -104,7 +104,7 @@ def point_kml_at_png(product_root, logger):
     """
     The KML in PREVIEW places one image on the map: in the L1C the JPEG, which
     cannot be transparent. In the L1D it places the PNG of the same name (same
-    footprint, transparent where there is no data; Enrico, 13 Oct 2026). Each
+    footprint, transparent where there is no data). Each
     KML must have exactly one <href>, naming a JPEG or a PNG that has a PNG of
     the same name in PREVIEW; a KML that already places the PNG is left as it
     is. Anything else stops the processor.

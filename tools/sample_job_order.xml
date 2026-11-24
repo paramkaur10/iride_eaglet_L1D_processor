@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sample Job Order for local test runs; in operations PDGS writes the Job Order.
+  tools/make_job_order.py fills in the paths for a given product (and colour AUX
+  file) and writes the result into the run folder.
+-->
+<Ipf_Job_Order>
+  <Ipf_Conf>
+    <Processor_Name>EAGLET2_L1D_PROC</Processor_Name>
+    <Version>01.02</Version>
+    <Logging_Level>INFO</Logging_Level>
+    <Processing_Station>IRI</Processing_Station>
+    <Sensing_Time>
+      <Start>20261017_093952000000</Start>
+      <Stop>20261017_093955000000</Stop>
+    </Sensing_Time>
+    <List_of_Dyn_Processing_Parameters count="0">
+    </List_of_Dyn_Processing_Parameters>
+  </Ipf_Conf>
+  <List_of_Ipf_Procs count="1">
+    <Ipf_Proc>
+      <Task_Name>EAGLET2_L1D</Task_Name>
+      <Task_Version>01.00</Task_Version>
+      <Breakpoint>
+        <Enable>OFF</Enable>
+        <List_of_Brk_Files count="0"/>
+      </Breakpoint>
+      <List_of_Config_Files count="0">
+      </List_of_Config_Files>
+      <List_of_Inputs count="2">
+        <Input>
+          <File_Type>1CSP__RGB3</File_Type>
+          <File_Name_Type>Physical</File_Name_Type>
+          <List_of_File_Names count="1">
+            <!-- the absolute path of the L1C RGB3 product zip, in the working
+                 directory of the run (the folder of this Job Order) -->
+            <File_Name>/data/run/IME04_1CSP__RGB3_20261017T093952_20261017T093955_20261017T112249_04445_R037_O_A01.zip</File_Name>
+          </List_of_File_Names>
+        </Input>
+        <Input>
+          <File_Type>AXE1D_CLUT</File_Type>
+          <File_Name_Type>Physical</File_Name_Type>
+          <List_of_File_Names count="1">
+            <!-- optional: a colour AUX file that overrides the processor's own
+                 (its <Method> picks LUT, CLASS_MODEL or HYBRID) -->
+            <File_Name>/data/run/IME___AXE1D_CLUT_20261017T000000_20990101T000000_20261019T112255____________O_001.xml</File_Name>
+          </List_of_File_Names>
+        </Input>
+      </List_of_Inputs>
+      <List_of_Outputs count="1">
+        <Output>
+          <Destination>External</Destination>
+          <Mandatory>Yes</Mandatory>
+          <File_Type>1DSP__RGB3</File_Type>
+          <File_Name_Type>Physical</File_Name_Type>
+          <File_Name>./</File_Name>
+          <Reg_Exp>^IME[0-9]{2}_1DSP__RGB3.*\.zip$</Reg_Exp>
+        </Output>
+      </List_of_Outputs>
+    </Ipf_Proc>
+  </List_of_Ipf_Procs>
+</Ipf_Job_Order>

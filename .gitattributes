@@ -1,8 +1,5 @@
-# pictures for the README: left out of git archive, so out of the Docker build context and of GitHub's Download ZIP
+# Left out of git archive, so out of the Docker build context (docker/build_image.sh) and of GitHub's
+# Download ZIP: the documentation and its pictures, the offline tools and the tests.
 docs/ export-ignore
-# the LUT tools: kept with the processor, left out of the Docker build context and of GitHub's Download ZIP too
 tools/ export-ignore
-# the posters and their panels: kept in the repository, left out of the Docker build context and of GitHub's
-# Download ZIP too ([[:space:]] matches the space in the file name)
-poster_panels/ export-ignore
-A0[[:space:]]poster.pdf export-ignore
+tests/ export-ignore

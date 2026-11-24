@@ -1,89 +1,38 @@
 #!/usr/bin/env python3
 """
-process_l1c.py: Eaglet-2 L1C -> L1D processor, cloud masking and colour
-correction. Task executable (repository iride_eaglet_processor_v2).
+process_l1c.py: the EAGLET2_L1D task of the IRIDE PDGS. Turns an Eaglet-2 L1C RGB3 product into an L1D
+product: cloud mask and cloud confidence (Clarity), colour correction (the colour AUX file), new quicklooks,
+XML and STAC.
 
-PDGS ICD compliance (PDGS-ID-XPR-IRIDE-0209 v2.4):
-  * Accepts exactly one command-line argument: the absolute path to the
-    Job Order XML file (per Section 3.1.2 / Appendix E). No other
-    arguments, no interactive input.
-  * Does NOT scan the working directory for input files. The input file
-    path is read from the Job Order itself (Section 3.1.2.3), per the
-    ICD's explicit instruction that a processor "must rely on the paths
-    specified in the JobOrder, trusting that they exist as volumes
-    mounted at container runtime."
-  * Logs in the exact structured format required by Section 3.1.4:
-    one-line, Syslog-style, unbuffered, on stdout (Debug/Info/Progress)
-    and stderr (Warning/Error).
-  * Returns an exit code per Section 3.1.5: 0 = OK, 255 = FAILURE, also
-    for an error the processor does not catch itself (Python would exit
-    with 1, which PDGS reads as "incomplete", not as a failure).
-  * Logs "OUTPUT_READY: <file name>" for the output, the name relative to
-    the working directory (Section 3.1.4.5).
-  * Runs on CPU only: no GPU is used, even on a machine that has one. Uses
-    at most NUMBER_OF_CPUS threads, the Task Table's Number_of_CPUs, on any
-    machine (Section 2.1).
-  * Writes only in the working directory (Section 2.1): temporary files
-    and library caches go to a scratch folder there, removed at the end.
-  * Runs fully offline: the cloud model (Clarity) is read from its package in
-    models/clarity_eaglet2_fp32, shipped with the processor and checked
-    against the package's own SHA256SUMS, never downloaded at run time and
-    never looked for in the home folder. Required for air-gapped deployment
-    (IRIDE PDGS).
-  * Generates a NEW L1D output product from the L1C input (naming: "1CSP"
-    -> "1DSP", generation timestamp = this run's processing time, environment
-    and baseline from the Job Order). The
-    original input zip is never modified or deleted. The L1D product keeps
-    the L1C layout, renamed throughout to the new L1D product ID, with:
-        IMG_DATA/<NEW_ID>.tif        the L1D image, in place of the L1C one:
-                                     colour-corrected RGB (true colour), Cloud
-                                     Optimized GeoTIFF, LZW (lossless), uint16
-                                     = reflectance x 10000 + 1000, 0 = no data;
-                                     white where the L1C is saturated
-        AUX_DATA/<NEW_ID>.CLM.tif    5-class cloud mask
-        AUX_DATA/<NEW_ID>.COM.tif    cloud confidence map
-        AUX_DATA/<NEW_ID>.CLM.json   class legend
-        <NEW_ID>.json                updated: eo:cloud_cover, clm/com/clm_aux,
-                                     the rgb asset and its renders describing the
-                                     L1D image, the L1D identity (collection,
-                                     description, processing:level L1D,
-                                     processing:lineage = the input L1C product,
-                                     processing:software = this processor and
-                                     version), quicklook -> PNG and thumbnail ->
-                                     JPEG, id, created/updated, asset hrefs,
-                                     file checksums and sizes
-        <NEW_ID>.xml                 the L1C XML as in Enrico's L1D template:
-                                     PRODUCT_ID = <NEW_ID>, PROCESSING_LEVEL L1D,
-                                     GENERATION_TIME = this run's generation time,
-                                     AUXILIARY_FILE = only the colour AUX file,
-                                     INPUT_PRODUCTS = the input L1C zip,
-                                     Processor_Version = this processor's; and
-                                     Rescaling_Factors (GAIN 0.0001, OFFSET -0.1)
-                                     and the image SHA-256 set for the L1D image
-        PREVIEW/<NEW_ID>.QLK.*       PNG and JPEG drawn from the L1D image (same
-                                     names, formats and sizes as in the L1C),
-                                     stretched with the STAC render range
-                                     (each band from its dark level, one span
-                                     for the three) and a gamma of 1.6;
-                                     the PNG is RGBA, transparent where there is
-                                     no data; the KML places the PNG on the map
-                                     (the L1C one places the JPEG)
-    packaged as <NEW_ID>.zip in the same working directory.
-  * The colour correction is configured by an AUX file of type AXE1D_CLUT
-    (IME___AXE1D_CLUT_....xml: the LUT, Enrico's class model, and <Method>,
-    which selects LUT, CLASS_MODEL or HYBRID). The processor carries its own
-    in aux/ and uses it by default (the newest, by the creation time in the
-    name); an AXE1D_CLUT file given in the Job Order overrides it. PDGS gives
-    AUX files zipped: <ID>.zip holding <ID>/<ID>.xml and its <ID>/<ID>.hdr.
-    The processor reads the XML in the zip (an unzipped folder or the bare
-    XML work too), and reads and checks the file before anything else: without
-    a usable AUX file there is no L1D image, exit code 255 within seconds.
-  * Calibration (DN * gain + offset) comes from the product XML's
-    Rescaling_Factors, for the cloud mask and the colour step alike.
-  * Logs the time spent in each step at the end ("Processing times").
+    python process_l1c.py <absolute path to the Job Order>
 
-Usage (as invoked by the PDGS wrapper script, per Appendix E):
-    python process_l1c.py <absolute_path_to_JobOrder.xml>
+PDGS interface, as the IRIDE PDGS documentation for processors defines it:
+  * One argument, the Job Order. Every input path comes from it: the working directory is never scanned.
+  * Log: one line per message in the PDGS format, on stdout (debug, info, progress) and stderr (warning,
+    error), and "OUTPUT_READY: <name>" for the output, relative to the working directory.
+  * Exit code 0 when done, 255 on any failure, including an error the processor does not catch itself.
+  * CPU only, at most Number_of_CPUs threads (task_table.xml) on any machine. Offline: the cloud model is
+    read from its package in models/ and checked against its SHA256SUMS. Writes only in the working
+    directory: temporary files go to a scratch folder there, removed at the end.
+
+The L1D product, <NEW_ID> (the L1C ID with 1CSP -> 1DSP, the generation time of the run, the environment and
+processing baseline from the Job Order), keeps the L1C layout, renamed throughout:
+    IMG_DATA/<NEW_ID>.tif        the L1D image, in place of the L1C one: colour-corrected RGB, Cloud
+                                 Optimized GeoTIFF, LZW, uint16 = reflectance x 10000 + 1000, 0 = no data;
+                                 white where the L1C is saturated
+    AUX_DATA/<NEW_ID>.CLM.tif    cloud mask: 0 no data, 1 clear, 2 thick cloud, 3 thin cloud, 4 cloud shadow
+    AUX_DATA/<NEW_ID>.COM.tif    cloud confidence: probability of thick plus thin cloud, x 10000
+    AUX_DATA/<NEW_ID>.CLM.json   class legend
+    <NEW_ID>.json                STAC: L1D identity, eo:cloud_cover, the cloud assets, the L1D image and its
+                                 render range, the previews, checksums and sizes
+    <NEW_ID>.xml                 the L1C XML with the L1D header, Rescaling_Factors and image checksum
+    PREVIEW/<NEW_ID>.QLK.*       PNG (transparent where there is no data) and JPEG drawn from the L1D image
+                                 with the STAC render range and a gamma of 1.6; the KML places the PNG
+packaged as <NEW_ID>.zip in the working directory. The input zip is never modified.
+
+The colour correction is configured by a colour AUX file (AXE1D_CLUT: the LUT, the class model and <Method>):
+the processor's own in aux/, or one given in the Job Order, bare or zipped as PDGS archives AUX files. It is
+read and checked first: without a usable one there is no L1D image, exit code 255 within seconds.
 """
 
 import atexit
@@ -102,8 +51,8 @@ _PROCESSOR_ROOT = Path(__file__).resolve().parent
 
 # --- Exit code of an error the processor does not catch ------------------
 # Python ends with exit code 1 on an uncaught error (e.g. a package that
-# fails to import), and PDGS reads 1-127 as "incomplete" and carries on
-# (ICD 3.1.5). Such an error ends the task with 255 (EXIT_FAILURE) instead.
+# fails to import), and PDGS reads 1-127 as "incomplete" and carries on.
+# Such an error ends the task with 255 (EXIT_FAILURE) instead.
 # Set before the imports below.
 def _exit_255_on_uncaught_error(exc_type, exc, tb):
     traceback.print_exception(exc_type, exc, tb)
@@ -117,7 +66,7 @@ sys.excepthook = _exit_255_on_uncaught_error
 
 # --- Temporary files: in the working directory only ----------------------
 # The processor may write only in the working directory, the folder of the
-# Job Order (ICD 2.1). Libraries keep temporary files and caches in the
+# Job Order. Libraries keep temporary files and caches in the
 # temporary folder (PyTorch keeps a cache folder there), so TMPDIR points to
 # a scratch folder in the working directory, removed when the processor
 # ends. Set before the imports below.
@@ -145,7 +94,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # --- CPUs -----------------------------------------------------------------
 # The Task Table gives this task NUMBER_OF_CPUS CPUs, and the processor must
-# keep within them on any machine (ICD section 2.1): the thread pools of
+# keep within them on any machine: the thread pools of
 # PyTorch and of NumPy's maths libraries are sized to them, not to all the
 # cores of the machine. Must be set before numpy and torch are imported.
 NUMBER_OF_CPUS = 2      # must match Number_of_CPUs in task_table.xml
@@ -159,10 +108,10 @@ sys.path.insert(0, str(_SRC_DIR))
 
 import numpy as np
 
-from job_order import parse_job_order, JobOrderError
-from pdgs_logger import PdgsLogger
-from product_naming import (derive_output_product_id, rename_product_in_place, update_json_references,
-                            ProductNamingError)
+from iride_eaglet_processor.job_order import parse_job_order, JobOrderError
+from iride_eaglet_processor.pdgs_logger import PdgsLogger
+from iride_eaglet_processor.product_naming import (derive_output_product_id, rename_product_in_place,
+                                                   update_json_references, ProductNamingError)
 
 from iride_eaglet_processor.raster_reader import read_product, NODATA_VALUE
 from iride_eaglet_processor.footprint import get_valid_footprint
@@ -188,13 +137,10 @@ from iride_eaglet_processor.colour_correction import (
 
 
 # --- Must match task_table.xml exactly -----------------------------------
-# Named after the OUTPUT level (L1D), per PDGS's own convention: see the
-# HAWK_L1B_PROC example in the ICD (Section 4.1.1), which is named after
-# its output (L1B) despite consuming L0 input. No "CLM" in the names: the
-# processor does the whole L1C to L1D step, cloud mask and colour
-# correction (Enrico, 12 Oct 2026). PROCESSOR_VERSION is also written in
-# the STAC of the product (processing:software) and is the tag of the
-# Docker image.
+# Named after the output level (L1D), as PDGS names its processors: the
+# processor does the whole L1C to L1D step, cloud mask and colour correction.
+# PROCESSOR_VERSION is also written in the STAC of the product
+# (processing:software) and is the tag of the Docker image.
 PROCESSOR_NAME = "EAGLET2_L1D_PROC"
 PROCESSOR_VERSION = "01.02"
 TASK_NAME = "EAGLET2_L1D"
@@ -212,7 +158,7 @@ INFERENCE_RESOLUTION = 5.0   # m, the cloud model's grid (pixel_m in its sensor.
 # (deflating them again costs time and saves almost nothing)
 STORED_IN_ZIP = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".jp2")
 
-# Exit codes per ICD Section 3.1.5.3
+# Exit codes for PDGS
 EXIT_OK = 0
 EXIT_FAILURE = 255      # 128-255 range: error, PDGS aborts
 
@@ -329,7 +275,7 @@ def process_product(input_zip_path, cc, model, logger, timer, environment=None, 
     input_zip_path: absolute Path to the L1C RGB3 product zip, as supplied
     by the Job Order. Extracted and enriched under its original (L1C)
     name, then the whole product is renamed to the derived L1D product ID
-    (per Enrico/Paola's confirmed naming convention) and packaged as a
+    and packaged as a
     NEW output zip in the same working directory. The original input zip
     is never modified or deleted.
     cc: the colour correction (ColourCorrection), read from the AUX file of the Job Order or the processor's own.
@@ -568,8 +514,7 @@ def main():
         sys.exit(EXIT_FAILURE)
     logger.info(f"Colour correction: {cc.describe()}, read from {cc.source}")
 
-    # Environment and processing baseline of the L1D name: from the Job Order (Enrico,
-    # 14 Oct 2026); if PDGS leaves one out or empty, the L1C's is kept, with a warning
+    # Environment and processing baseline of the L1D name: from the Job Order; if PDGS leaves one out or empty, the L1C's is kept, with a warning
     dyn = job_order["dyn_params"]
     environment = dyn.get("Environment") or None
     baseline = dyn.get(f"Processing_Baseline_{OUTPUT_FILE_TYPE}") or None
@@ -588,7 +533,7 @@ def main():
         model = load_cloud_model(logger)
         output_path = process_product(input_zip_path, cc, model, logger, timer,
                                       environment=environment, baseline=baseline)
-        # the name relative to the working directory, as PDGS reads it (ICD 3.1.4.5)
+        # the name relative to the working directory, as PDGS reads it
         logger.info(f"OUTPUT_READY: {os.path.relpath(Path(output_path).resolve(), job_order['working_dir'])}")
         logger.info(f"[Stop] exit_code={EXIT_OK}")
         sys.exit(EXIT_OK)

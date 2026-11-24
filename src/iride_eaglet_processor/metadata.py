@@ -10,7 +10,7 @@ from iride_eaglet_processor.colour_correction import L1D_GAIN, L1D_OFFSET
 
 # Class definitions: (value, name, title, description). Percentages are
 # filled in per-scene from the actual computed stats, not hardcoded here.
-# Matches our own 5 classes only (nodata + OmniCloudMask's 4 native
+# Matches our own 5 classes only (nodata + the cloud model's 4
 # classes) -- no land-cover discrimination (vegetation/water/urban/etc),
 # since this processor does not implement a land-cover classifier.
 CLM_CLASS_DEFINITIONS = [
@@ -33,8 +33,8 @@ IMAGE_BAND_DESCRIPTION = "Level-1D Top of Atmosphere Reflectance {} Band"   # {}
 COG_MEDIA_TYPE = "image/tiff; application=geotiff; profile=cloud-optimized"
 BAND_STATISTICS_KEYS = ("statistics", "raster:statistics", "raster:histogram")   # described the L1C values
 
-# L1D identity of the STAC item, as agreed for the marketplace (Rita's template
-# and Enrico's notes, 12 Oct 2026). The STAC is inherited from the L1C, so each
+# L1D identity of the STAC item, as agreed for the marketplace (12 Oct 2026).
+# The STAC is inherited from the L1C, so each
 # L1C value below is checked and replaced; anything else stops the processor.
 SOFTWARE_NAME = "Eaglet-2 Level 1D processor"     # processing:software, with the processor's own version
 PREVIEW_FILE_FIELDS = ("href", "type", "file:checksum", "file:size", "file:local_path")

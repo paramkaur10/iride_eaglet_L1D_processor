@@ -1,13 +1,12 @@
 # product_xml.py
 """
-The header of the L1D product XML, as in Enrico's L1D template (12 Oct 2026).
+The header of the L1D product XML, as in the L1D template (12 Oct 2026).
 
 The L1D product keeps the L1C XML, element names included (Level-1C_Main_Product_Header,
 L1C_Product_Image_Characteristics, ...). The template marks what the L1D processor updates:
     PRODUCT_ID           the new L1D product ID
     PROCESSING_LEVEL     L1D
     GENERATION_TIME      the L1D generation time, the same as in the product name and the STAC
-                         (Enrico, 13 Oct 2026)
     AUXILIARY_FILE       only the colour AUX file used (its name without .xml or .zip), in place of the L1C list
     INPUT_PRODUCTS       one PRODUCT, elem="1": the input L1C product zip
     Processor_Version    this processor's version
@@ -67,7 +66,7 @@ def _keep_one(text, pattern, new_element, what):
 def set_l1d_header_in_xml(xml_path, input_product_id, new_product_id, generation_time, input_zip_name, aux_path,
                           processor_version, logger):
     """
-    Writes the L1D header into the product XML (still named after the L1C at this point), as in Enrico's
+    Writes the L1D header into the product XML (still named after the L1C at this point), as in the L1D
     template. input_product_id must be the PRODUCT_ID of the XML (the L1C), whose PROCESSING_LEVEL must
     be L1C. generation_time (UTC) is the one in the new product name; it is written as in the STAC
     (created / updated), e.g. 2026-10-13T09:12:45.123456Z. aux_path is the colour AUX file used (the XML, or

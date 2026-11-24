@@ -5,7 +5,7 @@ import numpy as np
 
 def compute_cloud_stats(four_class_mask, valid_mask=None):
     """
-    OmniCloudMask's native classes (unshifted, model-internal):
+    The cloud model's classes, in the processor's order (unshifted):
       0 = clear
       1 = thick cloud
       2 = thin cloud

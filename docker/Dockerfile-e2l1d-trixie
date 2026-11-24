@@ -1,18 +1,18 @@
-# Eaglet-2 L1C to L1D processor (EAGLET2_L1D_PROC 01.02) for IRIDE PDGS, in the format of the PDGS
+# Eaglet-2 L1C to L1D processor (EAGLET2_L1D_PROC 01.02) for the IRIDE PDGS, in the format of the PDGS
 # build of the previous version (Dockerfile-e2cp-trixie, image ipf-ime-msi-l1cc:01.00): the same
-# production base image, user, virtual environment and folders. Build context, as for that build
-# (docker/build_image.sh makes it in dist/build/ from the repository):
-#   iride_eaglet_processor_v2-main.zip     the repository, as GitHub's "Download ZIP" of main
+# production base image, user, virtual environment and folders. Build context (docker/build_image.sh
+# makes it in dist/build/ from the repository):
+#   iride_eaglet_processor_v2-main.zip     the repository as a zip (its name sets the folder in the image)
 #   Eaglet-2-L1D-requirements-trixie.txt   the Python packages (docker/ in the repository)
-#   clarity_eaglet2_fp32/                  the cloud model, Clarity: its package as delivered, with its SHA256SUMS
-# Changes from 01.01: the cloud model is Clarity instead of OmniCloudMask. Its package goes to
-# models/clarity_eaglet2_fp32 of the repository, where the processor reads it, and is checked against its
-# SHA256SUMS here; OmniCloudMask and the packages only it needed (Hugging Face, timm,
-# segmentation-models-pytorch, torchvision, requests) are no longer installed. PDGS runs it as
+#   clarity_eaglet2_fp32/                  the cloud model package (Clarity), as delivered, with its SHA256SUMS
+# The cloud model package goes to models/clarity_eaglet2_fp32 of the repository, where the processor
+# reads it, and is checked against its SHA256SUMS here. PDGS runs the image as
 #   docker run --user 1100:600 ... -v <WD>:<WD>:rw -w <WD> ipf-ime-msi-l1d:01.02 EAGLET2_L1D <WD>/JobOrder.<id>.xml
 
 #production base image bc5c1e7a2ec7
-FROM python:3.14.8-slim-trixie
+# Pinned to the copy of python:3.14.8-slim-trixie that 01.01 was built on (the build of 6 Oct 2026,
+# linux/amd64, image ID cbe8543d6805): later copies under the same tag carry newer Debian packages.
+FROM python:3.14.8-slim-trixie@sha256:cfe2e24a75302a15934d37c2d86412893c0aa934dc3a97cbb439d04c01890ca9
 
 RUN apt-get update
 RUN apt-get install -y --no-install-recommends unzip libexpat1

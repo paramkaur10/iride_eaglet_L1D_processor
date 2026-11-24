@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # cloud_patch.py: EXPERIMENT, not a release. Changes the colour step of the L1D processor (01.01) so that clouds
-# keep a neutral colour: where the processor's own cloud confidence (COM, OmniCloudMask's thick + thin cloud
-# probability) is high, the pixel becomes grey at the brightness the LUT gives it; very bright pixels the cloud
+# keep a neutral colour: where the processor's own cloud confidence (COM, the 01.01 cloud model's thick + thin
+# cloud probability) is high, the pixel becomes grey at the brightness the LUT gives it; very bright pixels the cloud
 # mask misses (snow) get one common factor on the three bands, so the LUT cannot change their hue. Darker ground
 # keeps the full LUT. Applied to the processor folder given (inside the image build); stops without changing
 # anything if a line it needs is not there exactly once.

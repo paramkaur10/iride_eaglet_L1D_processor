@@ -11,12 +11,12 @@ Two methods, plus their mix, all configured by one auxiliary file
                 delivered. "Vegetation around" is the share of vegetation in
                 the ~70 m around each pixel, judged from the image itself at
                 ~10 m.
-  CLASS_MODEL   Enrico Cadau's model (applica_L1C_RGB.py v2, stored unchanged
+  CLASS_MODEL   the class model of E. Cadau, ESA (applica_L1C_RGB.py v2, stored unchanged
                 as JSON in the AUX file): each pixel is weighted between
                 water / vegetation / built-up by Gaussian mixtures on its RGB
                 triplet, one transform per class, negatives set to 0. The
                 brightness comes out close to Sentinel-2.
-  HYBRID        his colour where his model sees vegetation or water inside
+  HYBRID        the class model's colour where it sees vegetation or water inside
                 its training range (scaled to the LUT's brightness), the LUT
                 elsewhere.
 
@@ -225,7 +225,7 @@ class ColourCorrection:
             amap, [(np.asarray(rows) + 0.5) / f - 0.5, (np.asarray(cols) + 0.5) / f - 0.5],
             order=1, mode="nearest")
 
-    # ---- Enrico's class model ---------------------------------------------------
+    # ---- the class model ---------------------------------------------------------
     def class_model(self, rho):
         """rho (n, 3) -> (output with negatives set to 0, class weights (n, 3): water, vegetation, built-up)"""
         out, w = _class_model_apply(np.asarray(rho, dtype="float64"), self.model)
@@ -254,7 +254,7 @@ class ColourCorrection:
 
 
 def _prepare_model(M):
-    """Enrico's MODEL dict with its lists as arrays, plus his training range (LOW / HIGH in his script)"""
+    """the class model's MODEL dict with its lists as arrays, plus its training range (LOW / HIGH in its script)"""
     P = dict(center=np.asarray(M["center"], "float64"), scale=np.asarray(M["scale"], "float64"),
              components=[dict(mean=np.asarray(g["mean"], "float64"),
                               precision=np.asarray(g["precision"], "float64"),
@@ -268,7 +268,7 @@ def _prepare_model(M):
 
 
 def _class_model_apply(x, m):
-    """the same computation as apply() in Enrico's applica_L1C_RGB.py v2"""
+    """the same computation as apply() in applica_L1C_RGB.py v2"""
     z = (x - m["center"]) / m["scale"]
     logs = []
     for g in m["components"]:

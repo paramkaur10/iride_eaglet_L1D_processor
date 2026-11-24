@@ -1,8 +1,8 @@
 #!/bin/bash
-# Validation of the processor's Docker image, run the way PDGS runs it (ICD PDGS-ID-XPR-IRIDE-0209
-# v2.4, Appendices D and E): as user 1100:600, with only the working directory mounted and the CPUs
-# of the Task Table. Stricter than PDGS: no network and a read-only container file system, so any
-# download, or any file written outside the working directory, makes the run fail.
+# Validation of the processor's Docker image, run the way PDGS runs it: as user 1100:600, with only
+# the working directory mounted and the CPUs of the Task Table. Stricter than PDGS: no network and a
+# read-only container file system, so any download, or any file written outside the working directory,
+# makes the run fail.
 #
 #     docker/test_image.sh <L1C product zip> [<reference L1D zip>]
 #
@@ -176,7 +176,7 @@ else
     chmod -R a+rwX "$WD"
 fi
 
-# --- the run: the docker run of the ICD (Appendix E, item 13), plus --network none --read-only ---
+# --- the run: the docker run of PDGS, plus --network none --read-only ---
 echo "Image $IMAGE, task $TASK $TASK_VERSION, $CPUS CPUs"
 echo "Job Order: processing baseline $BASELINE, colour AUX file ${AUX_FILE:-none (the processor uses its own, $AUX_ID)}"
 echo "Working directory $WD"

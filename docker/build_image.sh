@@ -1,7 +1,6 @@
 #!/bin/bash
 # Builds the Docker (OCI) image of the processor the way PDGS builds it (docker/Dockerfile-e2l1d-trixie,
-# in the format of the PDGS build of the previous version), and saves it for delivery (ICD Appendices
-# D and F):
+# in the format of the PDGS build of the previous version), and saves it for delivery:
 #     docker/build_image.sh           build the image <IMAGE_NAME>:<version>
 #     docker/build_image.sh --save    build it and save it in dist/, with its SHA-256
 # The build context is made in dist/build/ as PDGS has it: the repository as a zip
